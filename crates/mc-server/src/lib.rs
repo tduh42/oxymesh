@@ -19,6 +19,7 @@
 )]
 
 pub mod acl;
+pub mod console;
 pub mod limiter;
 pub mod neighbours;
 pub mod repeater;

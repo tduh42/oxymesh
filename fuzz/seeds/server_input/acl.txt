@@ -1,0 +1,11 @@
+setperm ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB 3
+get acl
+setperm abab 0
+tempradio 869.5,62.5,8,5,2
+clock sync
+time 1800000000
+ab|ver
+set owner.info a|b
+get owner.info
+set flood.max 300
+stats-core

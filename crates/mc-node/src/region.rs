@@ -228,6 +228,13 @@ impl RegionMap {
         self.regions.clear();
     }
 
+    /// `resetFrom` (`RegionMap.h:52`): no regions, ids continuing from `src`'s. The home, the
+    /// default and the wildcard's flags stay this map's own.
+    pub fn reset_from(&mut self, src: &RegionMap) {
+        self.regions.clear();
+        self.next_id = src.next_id;
+    }
+
     /// The transport key of a region (`getTransportKeysFor`): none for the wildcard or a
     /// private (`$`) region.
     pub fn key(r: &Region) -> Option<[u8; 16]> {

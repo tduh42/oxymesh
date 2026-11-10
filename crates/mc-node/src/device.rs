@@ -121,9 +121,10 @@ pub struct Info {
 }
 
 /// A radio front end (amplifier) and what the console may do with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FrontEnd {
     /// None: the board has no front-end commands (the ThinkNode M5).
+    #[default]
     None,
     /// An amplifier whose receive LNA cannot be switched (Heltec V4.2, GC1109).
     Pa,

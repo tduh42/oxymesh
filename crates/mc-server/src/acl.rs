@@ -73,11 +73,10 @@ impl Acl {
         }
     }
 
-    /// `getClient`: by key prefix.
+    /// `getClient`: by key prefix (an empty one matches the first client, as `memcmp` of 0
+    /// bytes does).
     pub fn get(&self, prefix: &[u8]) -> Option<usize> {
-        self.clients
-            .iter()
-            .position(|c| c.key.starts_with(prefix) && !prefix.is_empty())
+        self.clients.iter().position(|c| c.key.starts_with(prefix))
     }
 
     /// `putClient`: the client's entry, a new one, or, when full, the least recently active

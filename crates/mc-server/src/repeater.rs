@@ -6,12 +6,15 @@
 use core::fmt::Write;
 
 use mc_air::advert::TYPE_REPEATER;
-use mc_air::crypto::PUB_KEY_LEN;
+use mc_air::crypto::{PRV_KEY_LEN, PUB_KEY_LEN};
 use mc_air::{PacketBuf, PathLen, PayloadType, Route as AirRoute};
 use mc_core::{Duration, Instant};
 use mc_node::cli::Reply;
 use mc_node::contacts::{Contact, PATH_UNKNOWN};
+use mc_node::device::FrontEnd;
+use mc_node::dispatch::RadioParams;
 use mc_node::node::Routing;
+use mc_node::region::RegionMap;
 use mc_node::{Event, Node};
 use rand_core::Rng;
 
@@ -65,6 +68,8 @@ pub struct ServerPrefs {
     pub owner_info: heapless::String<119>,
     /// Discovery answers only requests asking for changes since this (our clock).
     pub discovery_mod_timestamp: u32,
+    /// `powersaving` (only boards that can sleep accept it).
+    pub powersaving: bool,
 }
 
 impl Default for ServerPrefs {
@@ -79,6 +84,7 @@ impl Default for ServerPrefs {
             allow_read_only: false,
             owner_info: heapless::String::new(),
             discovery_mod_timestamp: 0,
+            powersaving: false,
         }
     }
 }
@@ -88,14 +94,67 @@ impl Default for ServerPrefs {
 pub enum Action {
     /// The access list changed (admins only are kept, after the lazy delay).
     SaveAcl,
+    /// The node's or the repeater's settings changed.
+    SavePrefs,
+    /// The region table changed.
+    SaveRegions,
+    /// `set prv.key`: the identity used from the next start.
+    SaveIdentity([u8; PRV_KEY_LEN]),
+    Reboot,
+    PowerOff,
+    /// `erase` (serial only): wipe oxymesh's own store, never the C++ SPIFFS.
+    Erase,
+    /// Transmit power, RX gain or front end changed: apply them to the radio now.
+    RadioChanged,
+    /// `tempradio`: these settings on the radio until `RestoreRadio`; not saved.
+    TempRadio(RadioParams),
+    /// Back to the node's radio settings.
+    RestoreRadio,
+    /// Turn the GPS on or off.
+    Gps(bool),
+    /// Set the clock from the GPS.
+    GpsSync,
+    /// GPS update interval, seconds.
+    GpsInterval(u32),
+}
+
+/// The GPS as the board sees it (`LocationProvider`).
+#[derive(Debug, Clone, Default)]
+pub struct Gps {
+    /// Powered (`isEnabled`).
+    pub enabled: bool,
+    /// Asked to run (setting `gps`).
+    pub active: bool,
+    pub fix: bool,
+    pub sats: i32,
+    /// `gps diag` (`formatDiagnostics`).
+    pub diag: heapless::String<120>,
 }
 
 /// What the board reports, set by the runner.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Board {
     pub battery_mv: u16,
     pub mcu_temp_deci: Option<i16>,
     pub noise_floor: i16,
+    /// `board` (`getManufacturerName`).
+    pub manufacturer: &'static str,
+    /// `ver` (`FIRMWARE_BUILD_DATE`).
+    pub build_date: &'static str,
+    /// `power`: `None` where the board cannot tell.
+    pub usb_powered: Option<bool>,
+    pub solar_charging: Option<bool>,
+    pub external_power: bool,
+    pub charging: bool,
+    /// A GPS (`ENV_INCLUDE_GPS`, and detected): the `gps` commands and the `gps` setting.
+    pub gps: Option<Gps>,
+    /// The board can sleep (`powersaving on`).
+    pub powersaving: bool,
+    /// `radio.fem.rxgain`: the Heltec V4's front end.
+    pub front_end: FrontEnd,
+    /// `get pwrmgt.bootreason`.
+    pub reset_reason: &'static str,
+    pub shutdown_reason: &'static str,
 }
 
 #[derive(Debug)]
@@ -116,7 +175,12 @@ pub struct Repeater {
     next_flood_advert: Option<Instant>,
     save_acl_at: Option<Instant>,
     started: Instant,
-    actions: heapless::Deque<Action, 8>,
+    actions: heapless::Deque<Action, 16>,
+    /// `tempradio`: the settings, when to apply them (once), when to go back.
+    pub(crate) temp_radio: Option<(RadioParams, Option<Instant>, Instant)>,
+    /// `region load` in progress, into `temp_regions`.
+    pub(crate) region_load: Option<crate::console::RegionLoad>,
+    pub(crate) temp_regions: RegionMap,
 }
 
 /// The node's settings a repeater starts from (`MyMesh.cpp:893-929`).
@@ -167,11 +231,43 @@ impl Repeater {
             save_acl_at: None,
             started: now,
             actions: heapless::Deque::new(),
+            temp_radio: None,
+            region_load: None,
+            temp_regions: RegionMap::new(),
         }
     }
 
     pub fn poll_action(&mut self) -> Option<Action> {
         self.actions.pop_front()
+    }
+
+    pub(crate) fn push(&mut self, a: Action) {
+        if self.actions.is_full() {
+            let _ = self.actions.pop_front();
+        }
+        let _ = self.actions.push_back(a);
+    }
+
+    /// The access list is saved `LAZY_CONTACTS_WRITE_DELAY` from now.
+    pub(crate) fn save_acl_soon(&mut self, now: Instant) {
+        self.save_acl_at = Some(now + Duration::from_millis(LAZY_SAVE_MS));
+    }
+
+    /// When `tick` has something to do next.
+    pub fn next_wakeup(&self) -> Option<Instant> {
+        let temp = self
+            .temp_radio
+            .as_ref()
+            .map(|(_, apply, revert)| apply.unwrap_or(*revert));
+        [
+            self.next_local_advert,
+            self.next_flood_advert,
+            self.save_acl_at,
+            temp,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Puts the node in repeater mode (keeping routing rules already loaded), puts the clients
@@ -246,7 +342,17 @@ impl Repeater {
         }
         if self.save_acl_at.is_some_and(|t| now >= t) {
             self.save_acl_at = None;
-            let _ = self.actions.push_back(Action::SaveAcl);
+            self.push(Action::SaveAcl);
+        }
+        if let Some((params, apply, revert)) = self.temp_radio {
+            if apply.is_some_and(|t| now >= t) {
+                self.temp_radio = Some((params, None, revert));
+                self.push(Action::TempRadio(params));
+            }
+            if now >= revert {
+                self.temp_radio = None;
+                self.push(Action::RestoreRadio);
+            }
         }
     }
 
@@ -445,7 +551,7 @@ impl Repeater {
             c.permissions = (c.permissions & !acl::ROLE_MASK) | perms;
             ensure_contact(node, req.key);
             if perms != acl::GUEST {
-                self.save_acl_at = Some(now + Duration::from_millis(LAZY_SAVE_MS));
+                self.save_acl_soon(now);
             }
             idx = Some(i);
         }
@@ -570,7 +676,7 @@ impl Repeater {
             }
             let mut answer = Reply::new();
             if !retry {
-                self.command(node, ts, text, &mut answer, now);
+                self.command(node, ts, text, &mut answer, &mut Discard, now, rng);
             }
             if answer.is_empty() {
                 return;
@@ -594,27 +700,6 @@ impl Repeater {
                 now,
             );
         }
-    }
-
-    /// The console (`handleCommand`), for admins over the air and on the serial port; the
-    /// whole command set is ported in `docs/spec/server.md` §4.
-    pub fn command(
-        &mut self,
-        node: &mut Node,
-        ts: u32,
-        text: &[u8],
-        out: &mut Reply,
-        now: Instant,
-    ) {
-        let _ = (ts, now);
-        let Ok(c) = core::str::from_utf8(text) else {
-            let _ = out.push_str("Unknown command");
-            return;
-        };
-        if mc_node::cli::radio_command(&mut node.prefs, c, out).is_some() {
-            return;
-        }
-        let _ = out.push_str("Unknown command");
     }
 
     /// `handleRequest`: the reply after the tag, false for an unknown or refused request.
@@ -814,14 +899,23 @@ impl Repeater {
     }
 }
 
+/// Where serial-only output goes when a command came over the air.
+struct Discard;
+
+impl Write for Discard {
+    fn write_str(&mut self, _: &str) -> core::fmt::Result {
+        Ok(())
+    }
+}
+
 /// A logged-in client is a contact of the node, so that its requests decrypt.
-fn ensure_contact(node: &mut Node, key: &[u8; PUB_KEY_LEN]) {
+pub(crate) fn ensure_contact(node: &mut Node, key: &[u8; PUB_KEY_LEN]) {
     if node.contacts.find(key).is_none() {
         let _ = node.contacts.list.push(Contact::new(*key));
     }
 }
 
-fn forget_contact(node: &mut Node, key: &[u8; PUB_KEY_LEN]) {
+pub(crate) fn forget_contact(node: &mut Node, key: &[u8; PUB_KEY_LEN]) {
     if let Some(i) = node.contacts.list.iter().position(|c| c.pub_key == *key) {
         node.contacts.list.remove(i);
     }

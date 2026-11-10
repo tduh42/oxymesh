@@ -1,0 +1,10 @@
+get role
+set advert.interval 90
+region put eu
+region put fr eu
+region get fr
+region load
+ eu F
+  fr
+
+neighbors

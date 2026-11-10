@@ -316,6 +316,9 @@ impl World {
             battery_mv: 4_050,
             mcu_temp_deci: Some(231),
             noise_floor: -112,
+            manufacturer: "mc-sim",
+            build_date: "10-Nov-2026",
+            ..Default::default()
         };
         r.start(&mut sn.dev.node, now);
         sn.server = Some(r);

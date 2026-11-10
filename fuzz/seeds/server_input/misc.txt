@@ -1,0 +1,12 @@
+gps
+gps advert share
+sensor list
+set prv.key 00
+neighbor.remove ab
+discover.neighbors
+password secret
+set repeat off
+set loop.detect strict
+region def a b|a c
+region default x
+region list allowed

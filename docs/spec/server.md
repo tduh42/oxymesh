@@ -26,7 +26,7 @@ The repeater (`examples/simple_repeater/MyMesh.cpp`, "rpt" below) and, later, th
 | `TXT_ACK_DELAY` | 200 ms |
 | `CLI_REPLY_DELAY_MILLIS` | 600 ms |
 | `LAZY_CONTACTS_WRITE_DELAY` (access list save) | 5 s |
-| `MAX_NEIGHBOURS` | 50 |
+| `MAX_NEIGHBOURS` | per board build: 8 on the M5, 50 on the Heltec V4 (`Neighbours::with_limit`) |
 | Discovery answers | at most 4 per 120 s |
 | Anonymous requests (regions, owner, clock) | at most 4 per 180 s |
 | Roles (`permissions & 3`) | 0 guest, 1 read only, 2 read write, 3 admin |
@@ -135,4 +135,100 @@ To be written with milestone S2.
 
 ## 4. The repeater console
 
-To be written with milestone S1c. Until then the repeater answers the radio commands (`get`/`set` of `CommonRadioPrefs`, `companion.md` §6.1) and replies "Unknown command" to anything else.
+`mc_server::console` (`Repeater::command`), a port of `MyMesh::handleCommand` (rpt:1198-1287) and `CommonCLI` (`src/helpers/CommonCLI.cpp`). Lines come from admins over the air (§2.5) and from the serial port, where the timestamp is 0. Replies are the C++ texts, at most 160 bytes.
+
+### 4.1 How a line is read
+
+1. During `region load`, every line is a region (§4.5) until a blank one.
+2. Leading spaces are skipped. An `xx|` prefix (the companion's remote console) is copied to the start of the reply.
+3. Commands match **by prefix**, like the C++'s `memcmp`. So `rebootx` reboots, and `get flood.max.advert` is tested before `get flood.max`.
+4. They are tried in this order:
+   1. the repeater's own commands (§4.2);
+   2. the radio commands shared with the companion (`companion.md` §6.1);
+   3. the board's commands: `radio.fem.rxgain` on a Heltec V4 with a switchable LNA;
+   4. the common commands (§4.3, §4.4).
+
+   Anything else gets `Unknown command`.
+5. A setting saved from the console also turns off the 2-minute local adverts if `advert.interval` is under 60 minutes (`CommonCLI::savePrefs`). The default of 2 minutes is meant for new installs only.
+
+### 4.2 The repeater's own commands
+
+| Command | Reply, effect |
+|---|---|
+| `setperm {key hex} {permissions}` | role 0 removes a client found by key prefix; any other role needs the whole key, then adds or updates it. `OK`, `Err - bad params`, `Err - bad pubkey`, `Err - invalid params`. The access list is saved 5 s later |
+| `get acl` (serial) | prints `ACL:` and one `{permissions hex} {key hex}` line per client whose permissions are not 0; empty reply |
+| `discover.neighbors` | sends a discovery request (§2.7): `OK - Discover sent`; with anything after it: `Err - discover.neighbors has no options` |
+
+### 4.3 Common commands
+
+| Command | Reply, effect |
+|---|---|
+| `poweroff`, `shutdown`, `reboot` | no reply; the runner powers off or restarts |
+| `clkreboot` | clock set to 1715770351 (15 May 2024), then a restart |
+| `advert`, `advert.zerohop` | a flood (default scope) or zero-hop advert 1.5 s later: `OK - Advert sent`, `OK - zerohop advert sent` |
+| `clock` | `HH:MM - D/M/YYYY UTC` |
+| `clock sync` | over the air: the sender's time + 1 s if later than ours, `OK - clock set: …`; otherwise `ERR: clock cannot go backwards` |
+| `time {epoch}` | the same from a number, `(ERR: clock cannot go backwards)` |
+| `neighbors` | `{key[0..4] hex}:{seconds ago}:{SNR × 4}` lines, newest first, while the reply is under 134 bytes; `-none-` |
+| `neighbor.remove {hex}` | removes the neighbours whose key starts with it (all of them for an empty prefix): `OK`, `ERR: bad pubkey` (odd length) |
+| `tempradio {MHz},{kHz},{SF},{CR},{minutes}` | those radio settings 2 s later, unsaved, back after the minutes: `OK - temp params for N mins`, `Error, invalid params` |
+| `password {text}` | admin password (15 characters kept): `password now: {text}` |
+| `clear stats` | counters to 0: `(OK - stats reset)` |
+| `erase` (serial) | the runner wipes oxymesh's own store: `File system erase: OK` |
+| `ver`, `board`, `power` | `{version} (Build: {date})`, the manufacturer, `batt:{mV} mV usb:{yes/no/n/a} solar_chg:… ext:… charger:…` |
+| `sensor get/set/list` | the `gps` setting on boards with a GPS (`gps_interval` can be set too): `> 1`, `null`, `ok`, `can't find custom var`, `1 vars\ngps=1`, `no custom var` |
+| `region …` | §4.5 |
+| `gps`, `gps on/off/sync/diag/setloc`, `gps advert [none/share/prefs]` | boards with a GPS only (the M5) |
+| `powersaving [on/off]` | `Board not supported` for `on` (§4.6); `off`; `on`/`off` |
+| `stats-core`, `stats-radio`, `stats-packets` (serial) | the C++'s JSON (`StatsFormatHelper.h`) |
+
+### 4.4 `get` and `set`
+
+| Setting | Get | Set |
+|---|---|---|
+| `name` | `> {name}` | `OK`, `Error, bad chars` (`[ ] \ : , ? *`) |
+| `lat`, `lon` | `> {ftoa}` | `OK` |
+| `repeat` | `> on/off` | `OK - repeat is now ON/OFF` |
+| `flood.max`, `flood.max.unscoped`, `flood.max.advert` | `> N` | `OK`, `Error, max 64`. The value goes through `uint8_t`, so 300 becomes 44 |
+| `loop.detect` | `> off/minimal/moderate/strict` | `OK`, `Error, must be: off, minimal, moderate, or strict` |
+| `advert.interval` | `> {minutes}` | 0 or 60-240: `OK`, `Error: interval range is 60-240 minutes` |
+| `flood.advert.interval` | `> {hours}` | 0 or 3-168: `OK`, `Error: interval range is 3-168 hours` |
+| `guest.password` | `> {text}` | `OK` |
+| `allow.read.only` | `> on/off` | `OK` |
+| `owner.info` | `> {text}`, new lines shown as `|` | `|` stored as new lines: `OK` |
+| `prv.key` | serial only: 64 bytes in hex | `OK, reboot to apply! New pubkey: {hex}` for a key that passes `validatePrivateKey`; `Error, bad key` |
+| `freq` | (radio command) | serial only: `OK - reboot to apply`, not checked |
+| `public.key`, `role` | `> {hex}`, `> repeater` | |
+| `bridge.type` | `> none` | |
+| `bootloader.ver`, `adc.multiplier` | `Error: unsupported` | `adc.multiplier`: `Error: unsupported` |
+| `pwrmgt.support`, `pwrmgt.source`, `pwrmgt.bootmv`, `pwrmgt.bootreason` | `> unsupported`, `ERROR: Power management not supported`, `> Reset: …; Shutdown: …` | |
+| `extra.sf` | `No extra SF configured` | |
+| anything else | `??: {key}` | `unknown config: {rest}` |
+
+Hex output is uppercase, as `Utils::toHex` writes it.
+
+### 4.5 Regions (`CommonCLI.cpp:889-1027`, rpt:1199-1231)
+
+| Command | Reply, effect |
+|---|---|
+| `region` | the tree (`exportTo`) |
+| `region def {name}[|{jump}] …` | puts each name under the previous one, or under `jump` (found by prefix), with flood allowed; then the tree. `Err - empty def`, `Err - empty name`, `Err - empty jump`, `Err - put failed: …`, `Err - unknown jump: …` |
+| `region put {name} [{parent}]` | `OK - (flood allowed)`, `Err - unknown parent`, `Err - unable to put` |
+| `region remove {name}` | exact name: `OK`, `Err - not empty`, `Err - not found` |
+| `region get {prefix}` | ` {name} ({parent}) F` or ` {name} F` (`F` when flood is allowed), `Err - unknown region` |
+| `region allowf/denyf {prefix}` | `OK` |
+| `region home [{prefix}]` | ` home is now {name}`; ` home is {name}` or `*` |
+| `region default [{prefix}/<null>]` | creates the region if needed, flood allowed, saves the table: ` default scope is now {name}`; ` default scope is {name}` or `<null>`; `Err - region table full` |
+| `region list allowed/denied` | names, comma-separated, `-none-`; `Err - use 'allowed' or 'denied'` |
+| `region save` | `discovery_mod_timestamp` = now; saves settings and table: `OK` |
+| `region load` | then one region per line, indented by depth (1 to 7 spaces), ` F` to allow flood. A region already known keeps its id and flags. A blank line ends it: `OK - loaded N regions`. As in the C++, the table loaded has no home and no default region |
+| anything else | `Err - ??` |
+
+### 4.6 Where the console differs from the C++
+
+- There is no packet log: `log start`, `log stop`, `log erase` and `log` answer `Error: unsupported`.
+- There is no power saving: `powersaving on` answers `Board not supported`. The C++ gives this answer on boards without power saving.
+- There is no OTA update. `start ota` answers `Error`, as the C++ does on boards without OTA.
+- There are no bridges and no ADC multiplier.
+- After `region load`, the default scope used for adverts follows the new table at once. The C++ keeps the key it had computed until `region default` or a restart.
+- `stats-packets` "recv" and "sent" are the node's counters (§2.11).

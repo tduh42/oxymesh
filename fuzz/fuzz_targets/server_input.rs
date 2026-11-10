@@ -1,6 +1,6 @@
 //! The repeater role (`docs/spec/server.md`): what strangers send it once the node has
 //! decrypted it (anonymous requests, requests and console text from a logged-in client,
-//! control data), and console commands.
+//! control data), and console lines (from the serial port and over the air).
 //!
 //! Input: records `[selector][length][bytes…]`. Selector bits 0-1: 0 anonymous request,
 //! 1 request, 2 text, 3 control data; bit 4: came by flood; bit 5: from a second client.
@@ -93,9 +93,30 @@ fuzz_target!(|data: &[u8]| {
         r.tick(&mut node, now);
         assert!(r.acl.len() <= 32);
     }
+    // The console, line by line, from the serial port and over the air.
     if let Ok(s) = core::str::from_utf8(data) {
-        let mut out = Reply::new();
-        r.command(&mut node, 1, s.as_bytes(), &mut out, now);
+        for (i, line) in s.split('\n').take(16).enumerate() {
+            let ts = if i % 2 == 0 {
+                0
+            } else {
+                1_793_900_000 + i as u32
+            };
+            let mut out = Reply::new();
+            let mut serial = heapless::String::<4096>::new();
+            r.command(
+                &mut node,
+                ts,
+                line.as_bytes(),
+                &mut out,
+                &mut serial,
+                now,
+                &mut rng,
+            );
+            assert!(out.len() <= mc_node::cli::REPLY_MAX);
+            r.tick(&mut node, now);
+            assert!(r.acl.len() <= 32);
+        }
+        while r.poll_action().is_some() {}
     }
 
     // Everything queued goes out as canonical packets.
