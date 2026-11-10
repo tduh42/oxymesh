@@ -17,6 +17,7 @@
 pub mod chat;
 pub mod cli;
 pub mod clock;
+pub mod connections;
 pub mod contacts;
 pub mod device;
 pub mod dispatch;

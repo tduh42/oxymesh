@@ -684,7 +684,8 @@ impl Node {
                 return Some(key);
             }
         }
-        None
+        let clock = self.rtc.now(now);
+        self.connections.check_ack(crc, clock)
     }
 
     fn on_group(&mut self, ptype: PayloadType, idx: usize, plain: &[u8], snr4: i8, path_len: u8) {

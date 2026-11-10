@@ -21,6 +21,8 @@ const DELAY_MS: u64 = 300;
 pub struct RepeaterServer {
     pub admin_password: String,
     pub guest_password: String,
+    /// Login reply byte 5: keep-alive interval / 16 s (0 in v1.18 servers).
+    pub keep_alive: u8,
     /// Logged-in clients: key, permissions, last request timestamp.
     acl: Vec<([u8; 32], u8, u32)>,
     /// Events already handled.
@@ -33,6 +35,7 @@ impl RepeaterServer {
         Self {
             admin_password: String::from(admin),
             guest_password: String::from(guest),
+            keep_alive: 0,
             acl: Vec::new(),
             seen: 0,
             counter: 0,
@@ -104,7 +107,7 @@ impl RepeaterServer {
         let mut r = Vec::with_capacity(13);
         r.extend_from_slice(&now_s.to_le_bytes());
         r.push(LOGIN_OK);
-        r.push(0);
+        r.push(self.keep_alive);
         r.push(u8::from(perms == PERM_ADMIN));
         r.push(perms);
         r.extend_from_slice(&self.counter.to_le_bytes());

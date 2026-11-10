@@ -112,7 +112,6 @@ The reference is the original MeshCore v1.18 companion firmware on the same M5.
 ### Not there yet
 
 - **Only the companion role.** There are no repeater or room-server builds, which the C++ has.
-- **The `HAS_CONNECTION` keep-alive table** is not implemented.
 - **Two boards: the ThinkNode M5 and the Heltec V4.** The C++ supports dozens.
   - On the M5 board v2.0 (AG3352 GPS), oxymesh drives the GPS from its documented wiring (the C++ does not), but it has never run on such a board.
   - The Heltec's optional GPS header is not driven.

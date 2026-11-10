@@ -738,6 +738,8 @@ impl Device {
                 author,
                 text,
             } => {
+                let clock = self.node.rtc.now(now);
+                self.node.connections.mark_active(key, clock);
                 // A console command from a contact allowed to run them: answered here, not shown.
                 if *txt_type == 3 && self.remote_console(now, key, *ts, text, st) {
                     return;
@@ -909,7 +911,7 @@ impl Device {
             }
             Event::Response { key, data } => {
                 if !self.screen_response(now, key, data) {
-                    self.on_response(key, data);
+                    self.on_response(now, key, data);
                 }
             }
             Event::Request {
@@ -985,7 +987,7 @@ impl Device {
     }
 
     /// `onContactResponse` (`MyMesh.cpp:694-776`).
-    fn on_response(&mut self, key: &[u8; PUB_KEY_LEN], data: &[u8]) {
+    fn on_response(&mut self, now: Instant, key: &[u8; PUB_KEY_LEN], data: &[u8]) {
         let tag = u32::from_le_bytes(fixed(data));
         let key4 = u32::from_le_bytes(fixed(key));
         let len = data.len();
@@ -999,6 +1001,12 @@ impl Device {
                 });
             } else if data.get(4) == Some(&0) {
                 let b = |i: usize| data.get(i).copied().unwrap_or(0);
+                // Keep-alive asked for in byte 5, × 16 s (`MyMesh.cpp:704-708`).
+                let keep_alive = u16::from(b(5)) * 16;
+                if keep_alive > 0 {
+                    let clock = self.node.rtc.now(now);
+                    let _ = self.node.connections.start(key, keep_alive, clock);
+                }
                 self.push(&Response::LoginSuccess {
                     permissions: b(6),
                     prefix: prefix6(key),
@@ -1520,8 +1528,17 @@ impl Device {
                     Err(_) => self.err(err::TABLE_FULL),
                 }
             }
-            Command::HasConnection { .. } => self.err(err::NOT_FOUND),
-            Command::Logout { .. } => self.ok(),
+            Command::HasConnection { key } => {
+                if self.node.connections.has(&key) {
+                    self.ok();
+                } else {
+                    self.err(err::NOT_FOUND);
+                }
+            }
+            Command::Logout { key } => {
+                self.node.connections.stop(&key);
+                self.ok();
+            }
             Command::GetContactByKey { key } => match self
                 .node
                 .contacts

@@ -374,6 +374,8 @@ pub struct Node {
     pub disp: Dispatcher,
     pub(crate) seen: Seen,
     pub contacts: Contacts,
+    /// Keep-alive connections to servers (`HAS_CONNECTION`).
+    pub connections: crate::connections::Connections,
     pub channels: Channels,
     pub(crate) acks: [Option<ExpectedAck>; ACK_TABLE],
     pub(crate) next_ack: usize,
@@ -419,6 +421,7 @@ impl Node {
             disp: Dispatcher::new(Instant::ZERO, 1000),
             seen: Seen::new(),
             contacts: Contacts::new(),
+            connections: crate::connections::Connections::new(),
             channels: Channels::new(),
             acks: [None; ACK_TABLE],
             next_ack: 0,

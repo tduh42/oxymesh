@@ -272,6 +272,10 @@ Numbers print as the C++ prints its `float`s: the nearest single-precision value
 
 Over the air (`BaseChatMesh.cpp:263-292`, M:538-548): a TXT_MSG of type CLI_COMMAND (3) from a contact whose flags have 0x10 (`isRemoteCLIAllowed`) runs through the same console; a non-empty reply goes back as CLI_DATA (type 1) 600 ms later, stamped with a unique time that differs from the command's, direct if the contact's path is known, otherwise flooded within the scope. From other contacts the command goes to the app as a message, as before.
 
+### 6.2 Keep-alive connections (`HAS_CONNECTION`, `LOGOUT`)
+
+`BaseChatMesh.cpp:717-832`, M:704-708, 1741-1751; `mc_node::connections`. A login reply (`RESP_SERVER_LOGIN_OK`) whose byte 5 is not 0 opens a slot for that server, keep-alive = byte 5 × 16 s; 16 slots, the server's own or the last free one; none when full. `HAS_CONNECTION` answers OK while the slot exists, ERR 2 otherwise; `LOGOUT` empties it and answers OK. Messages from the server and an ACK matching a slot's expected keep-alive ACK refresh it. No keep-alive request is ever sent: the C++ companion's `checkConnections()` call is commented out (M:2410-2411), and with it the 2.5 × interval expiry. v1.18 repeaters and room servers always answer 0 in byte 5, so against them the table stays empty.
+
 ## 7. Default settings (M5 BLE build)
 
 Name = first 4 bytes of the key as 8 uppercase hex digits; 869.618 MHz / 62.5 kHz / SF8 / CR 5; 22 dBm; airtime_factor 1.0; tx_delay 0.5; direct 0.2; rx_delay 0; multi_acks 0; manual_add 0; telemetry 0/0/0; advert_loc_policy 0; ble_pin 0; repeat disabled; path_hash_mode 0; autoadd 0/0; boosted RX gain; GPS disabled; no default scope; no advert at boot (M:916-1007).
