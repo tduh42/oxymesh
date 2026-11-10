@@ -162,7 +162,7 @@ impl Server {
     /// Carries out a save action (`SaveAcl`, `SavePrefs`, `SaveRegions`, `SaveIdentity`);
     /// false for the others, which are the runner's.
     pub fn save(&self, node: &Node, action: Action, st: &mut impl ServerStore) -> bool {
-        let fallback = Routing::REPEATER;
+        let fallback = self.role.routing();
         let routing = node.routing.as_ref().unwrap_or(&fallback);
         match action {
             Action::SavePrefs => {
@@ -216,7 +216,7 @@ impl Server {
         clients: impl Iterator<Item = &'a [u8]>,
         regions: Option<&[u8]>,
     ) {
-        let routing = node.routing.get_or_insert(Routing::REPEATER);
+        let routing = node.routing.get_or_insert(self.role.routing());
         if let Some(b) = settings {
             decode_settings(b, &mut self.prefs, routing);
         }

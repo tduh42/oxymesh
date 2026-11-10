@@ -281,8 +281,9 @@ impl Server {
         self.push(Action::SavePrefs);
     }
 
-    fn routing(node: &mut Node) -> &mut Routing {
-        node.routing.get_or_insert(Routing::REPEATER)
+    /// The node's forwarding rules, the role's defaults if it has none yet.
+    fn routing(role: Role, node: &mut Node) -> &mut Routing {
+        node.routing.get_or_insert(role.routing())
     }
 
     /// `CommonCLI::handleCommand`.
@@ -579,7 +580,7 @@ impl Server {
             let _ = out.push_str(s);
         };
         let on_off = |b: bool| if b { "> on" } else { "> off" };
-        let fallback = Routing::REPEATER;
+        let fallback = self.role.routing();
         let routing = node.routing.as_ref().unwrap_or(&fallback);
         if k.starts_with("allow.read.only") {
             w(out, on_off(self.prefs.allow_read_only));
@@ -725,7 +726,7 @@ impl Server {
             }
         } else if let Some(v) = k.strip_prefix("repeat ") {
             let off = v.starts_with("off");
-            Self::routing(node).disable_fwd = off;
+            Self::routing(self.role, node).disable_fwd = off;
             self.save_prefs();
             w(
                 out,
@@ -744,15 +745,19 @@ impl Server {
             self.save_prefs();
             w(out, "OK");
         } else if let Some(v) = k.strip_prefix("flood.max.unscoped ") {
-            if max64(out, v, &mut Self::routing(node).flood_max_unscoped) {
+            if max64(
+                out,
+                v,
+                &mut Self::routing(self.role, node).flood_max_unscoped,
+            ) {
                 self.save_prefs();
             }
         } else if let Some(v) = k.strip_prefix("flood.max.advert ") {
-            if max64(out, v, &mut Self::routing(node).flood_max_advert) {
+            if max64(out, v, &mut Self::routing(self.role, node).flood_max_advert) {
                 self.save_prefs();
             }
         } else if let Some(v) = k.strip_prefix("flood.max ") {
-            if max64(out, v, &mut Self::routing(node).flood_max) {
+            if max64(out, v, &mut Self::routing(self.role, node).flood_max) {
                 self.save_prefs();
             }
         } else if let Some(v) = k.strip_prefix("owner.info ") {
@@ -783,7 +788,7 @@ impl Server {
             };
             match mode {
                 Some(m) => {
-                    Self::routing(node).loop_detect = m;
+                    Self::routing(self.role, node).loop_detect = m;
                     self.save_prefs();
                     w(out, "OK");
                 }
@@ -930,7 +935,7 @@ impl Server {
                 let _ = out.push_str("Err - empty def");
                 return;
             }
-            let regions = &mut Self::routing(node).regions;
+            let regions = &mut Self::routing(self.role, node).regions;
             let mut cursor = 0u16;
             for tok in payload.split(' ').filter(|t| !t.is_empty()) {
                 let (name, jump) = match tok.find(['|', ',']) {
@@ -975,7 +980,7 @@ impl Server {
             let _ = out.push_str(s);
         };
         let unknown = |out: &mut Reply| w(out, "Err - unknown region");
-        let regions = &mut Self::routing(node).regions;
+        let regions = &mut Self::routing(self.role, node).regions;
         if n == 1 {
             regions.export(out);
         } else if sub == "load" {
@@ -1115,7 +1120,7 @@ impl Server {
     /// One line of `region load`: `{indent}{name}[ F]`, a blank line to finish.
     fn region_load_line(&mut self, node: &mut Node, line: &str, out: &mut Reply) {
         if line.bytes().all(|b| b == b' ') {
-            let regions = &mut Self::routing(node).regions;
+            let regions = &mut Self::routing(self.role, node).regions;
             *regions = self.temp_regions.clone();
             self.region_load = None;
             let _ = write!(out, "OK - loaded {} regions", regions.len());

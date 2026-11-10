@@ -296,3 +296,20 @@ fn keep_alive_is_answered_with_an_ack_and_the_unsynced_count() {
 }
 
 use rand_chacha::rand_core::SeedableRng;
+
+#[test]
+fn a_restored_room_server_still_does_not_forward() {
+    // Restored before `start` with nothing stored, as the firmware does at first boot.
+    let now = mc_core::Instant::from_nanos(1_000_000_000);
+    let id = mc_sim::identity("hut");
+    let mut node = mc_node::Node::new(
+        id.clone(),
+        mc_node::Prefs::defaults(id.pub_key()),
+        mc_sim::EPOCH,
+        now,
+    );
+    let mut s = mc_server::Server::new(now, "v1.18.0-oxymesh", mc_server::Role::Room);
+    s.restore(&mut node, None, std::iter::empty(), None);
+    s.start(&mut node, now);
+    assert!(node.routing.as_ref().unwrap().disable_fwd);
+}
