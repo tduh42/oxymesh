@@ -3,10 +3,10 @@ source: crates/mc-ui/tests/tools.rs
 expression: s
 ---
 |Neighbours      18:35 80%|
-|2 heard by the repeater  |
+|1 heard by the repeater  |
 |                         |
-|▸ You             ▂▄▆█ 2m|
-|  Bob             ▂▄▆█ 2m|
+|▸ 3ad79dd4        ▂▄▆█ 0m|
+|                         |
 |                         |
 |                         |
 |                         |

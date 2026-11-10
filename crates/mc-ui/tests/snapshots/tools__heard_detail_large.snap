@@ -3,11 +3,11 @@ source: crates/mc-ui/tests/tools.rs
 expression: r.draw()
 ---
 |Relay Aiguille  18:35 80%|
-|Type                 Chat|
+|Type             Repeater|
 |Key              8f999539|
 |Route              direct|
 |Signal       ▂▄▆█ 10.0 dB|
-|Heard              1 time|
+|Heard             2 times|
 |Last                18:33|
 |Lat             45.8786 N|
 |Lon              6.8872 E|

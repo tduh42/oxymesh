@@ -1206,6 +1206,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-server"
+version = "0.0.0"
+dependencies = [
+ "heapless",
+ "mc-air",
+ "mc-core",
+ "mc-node",
+ "rand_core",
+]
+
+[[package]]
 name = "mc-sim"
 version = "0.0.0"
 dependencies = [
@@ -1213,6 +1224,7 @@ dependencies = [
  "mc-core",
  "mc-node",
  "mc-proto",
+ "mc-server",
  "proptest",
  "rand_chacha",
  "rand_core",

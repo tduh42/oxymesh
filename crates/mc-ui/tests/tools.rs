@@ -63,20 +63,18 @@ impl Rig {
         for i in [bob, alice, relay] {
             w.link(me, i);
         }
-        // The relay also answers like a MeshCore repeater (admin password "secret").
+        // The relay is a repeater (admin password "secret"), next to another one out of our
+        // range: its neighbour.
         w.serve_repeater(relay, "secret", "guest-pw");
         w.link(relay, bob);
+        let col = w.add("Relay Col", |_| {});
+        w.serve_repeater(col, "secret", "");
+        w.link(relay, col);
         for x in [bob, alice, relay, me] {
             let now = w.now;
             w.node(x).send_self_advert(now, false).unwrap();
             w.run(Duration::from_secs(3));
         }
-        // The relay advertises as a repeater in real life: our sim node is a companion with
-        // repeating on, so mark its contact as one.
-        let kr = *w.nodes[relay].dev.node.id.pub_key();
-        let n = &mut w.nodes[me].dev.node;
-        let s = n.contacts.find(&kr).unwrap();
-        n.contacts.get_mut(s).unwrap().kind = 2;
         w.run(Duration::from_secs(90));
         Self {
             w,
@@ -285,14 +283,11 @@ fn repeater_admin_login_status_and_neighbours() {
     let s = r.draw();
     assert!(s.contains("4.05 V") && s.contains("Up"), "{s}");
     insta::assert_snapshot!("repeater_status_large", s);
-    // Neighbours: the relay heard Bob, Alice and us.
+    // Neighbours: the repeaters the relay heard directly (one we never heard: no name).
     r.press(&[Click(B), Click(A), Long(A)]);
     r.run(5);
     let s = r.draw();
-    assert!(
-        s.contains("heard by the repeater") && s.contains("Bob"),
-        "{s}"
-    );
+    assert!(s.contains("1 heard by the repeater"), "{s}");
     insta::assert_snapshot!("neighbours_large", s);
 }
 

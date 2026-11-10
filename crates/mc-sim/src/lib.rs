@@ -16,9 +16,6 @@ use mc_node::{Device, Event, Node, Prefs, Storage};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{Rng, SeedableRng};
 
-pub mod server;
-pub use server::RepeaterServer;
-
 /// In-memory storage (tests, virtual device).
 #[derive(Debug, Default, Clone)]
 pub struct MemStorage {
@@ -99,8 +96,23 @@ pub struct SimNode {
     pub ui: Vec<UiEvent>,
     /// Frames sent to the app outside direct responses (notifications, contacts).
     pub app: Vec<Frame>,
-    /// Answers like a MeshCore repeater (discovery, login, status, neighbours).
-    pub server: Option<RepeaterServer>,
+    /// The repeater role (`mc-server`), driven by the node's events.
+    pub server: Option<mc_server::Repeater>,
+}
+
+impl SimNode {
+    /// Collects the node's events (handing them to the repeater role first) and notifications.
+    fn drain(&mut self, now: Instant) {
+        while let Some(e) = self.dev.poll_tap() {
+            if let Some(srv) = self.server.as_mut() {
+                srv.on_event(&mut self.dev.node, &e, now, &mut self.rng);
+            }
+            self.events.push(e);
+        }
+        while let Some(e) = self.dev.poll_ui() {
+            self.ui.push(e);
+        }
+    }
 }
 
 struct OnAir {
@@ -279,27 +291,34 @@ impl World {
         }
         for sn in &mut self.nodes {
             sn.dev.tick(now, &mut sn.rng, &mut sn.st);
-            while let Some(e) = sn.dev.poll_tap() {
-                sn.events.push(e);
-            }
-            while let Some(e) = sn.dev.poll_ui() {
-                sn.ui.push(e);
-            }
+            sn.drain(now);
             while let Some(f) = sn.dev.poll_app() {
                 sn.app.push(f);
             }
             if let Some(srv) = sn.server.as_mut() {
-                srv.serve(&mut sn.dev, &sn.events, now);
+                srv.tick(&mut sn.dev.node, now);
             }
         }
     }
 
-    /// Node `i` answers like a MeshCore repeater: it forwards (repeat on), and serves
-    /// discovery, logins (`admin` or `guest` password), status and neighbours. Its event list
-    /// must not be cleared while it serves.
+    /// Node `i` becomes a MeshCore repeater (`mc_server::Repeater`): it forwards, and serves
+    /// logins (`admin` or `guest` password), requests, the console, discovery and adverts.
+    /// Its board reports 4.05 V and a noise floor of −112 dBm.
     pub fn serve_repeater(&mut self, i: usize, admin: &str, guest: &str) {
-        self.nodes[i].dev.node.prefs.repeat = true;
-        self.nodes[i].server = Some(RepeaterServer::new(admin, guest));
+        let now = self.now;
+        let sn = &mut self.nodes[i];
+        let mut r = mc_server::Repeater::new(now, "v1.18.0-oxymesh");
+        r.prefs.admin_password.clear();
+        let _ = r.prefs.admin_password.push_str(admin);
+        r.prefs.guest_password.clear();
+        let _ = r.prefs.guest_password.push_str(guest);
+        r.board = mc_server::repeater::Board {
+            battery_mv: 4_050,
+            mcu_temp_deci: Some(231),
+            noise_floor: -112,
+        };
+        r.start(&mut sn.dev.node, now);
+        sn.server = Some(r);
     }
 
     fn log_overlaps_tx(&self, n: usize, start: Instant, end: Instant) -> bool {
@@ -346,12 +365,7 @@ impl World {
         while let Some(f) = sn.dev.poll_app() {
             out.push(f);
         }
-        while let Some(e) = sn.dev.poll_tap() {
-            sn.events.push(e);
-        }
-        while let Some(e) = sn.dev.poll_ui() {
-            sn.ui.push(e);
-        }
+        sn.drain(now);
         out
     }
 

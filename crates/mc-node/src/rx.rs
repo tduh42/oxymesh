@@ -269,7 +269,11 @@ impl Node {
                 if dest == self.id.hash() {
                     let sealed: heapless::Vec<u8, 184> =
                         heapless::Vec::from_slice(sealed).unwrap_or_default();
-                    do_not_retransmit = self.on_addressed(now, pkt, ptype, src, &sealed, snr4, rng);
+                    do_not_retransmit = if self.routing.is_some() {
+                        self.on_addressed_server(now, pkt, ptype, src, &sealed, region)
+                    } else {
+                        self.on_addressed(now, pkt, ptype, src, &sealed, snr4, rng)
+                    };
                 }
             }
             Payload::AnonReq {
@@ -295,11 +299,16 @@ impl Node {
                         {
                             do_not_retransmit = true;
                             let ts = u32::from_le_bytes(ts);
+                            let mut in_path = heapless::Vec::new();
+                            let _ = in_path.extend_from_slice(pkt.path());
                             self.emit(Event::AnonRequest {
                                 key,
                                 ts,
                                 data: text_of(data),
                                 flood: !direct,
+                                in_path_len: pkt.path_len.byte(),
+                                in_path,
+                                region,
                             });
                         }
                     }
@@ -436,6 +445,68 @@ impl Node {
                     .queue(pkt.clone(), 5, now + Duration::from_millis(d));
             }
         }
+    }
+
+    /// Server mode: a REQ, TXT_MSG or PATH from a client (a contact with the matching hash).
+    /// A PATH is stored (`onPeerPathRecv`, no reciprocal); a REQ or TXT_MSG goes to the server
+    /// whole. True if the frame was decrypted.
+    fn on_addressed_server(
+        &mut self,
+        now: Instant,
+        pkt: &PacketBuf,
+        ptype: PayloadType,
+        src: u8,
+        sealed: &[u8],
+        region: Option<u16>,
+    ) -> bool {
+        let _ = now;
+        for slot in self.contacts.by_hash(src) {
+            let id = self.id.clone();
+            let Some(secret) = self.contacts.get_mut(slot).and_then(|c| c.secret(&id)) else {
+                continue;
+            };
+            let mut buf = [0u8; 184];
+            let Ok(plain) = crypto::open(&secret, sealed, &mut buf) else {
+                continue;
+            };
+            let Some(key) = self.contacts.get(slot).map(|c| c.pub_key) else {
+                return true;
+            };
+            match ptype {
+                PayloadType::PATH => {
+                    let Ok(pp) = PathPlain::parse(plain) else {
+                        return true;
+                    };
+                    if let Some(c) = self.contacts.get_mut(slot) {
+                        let n = pp.path.len().min(c.out_path.len());
+                        c.out_path_len = pp.path_len.byte();
+                        if let (Some(dst), Some(src)) = (c.out_path.get_mut(..n), pp.path.get(..n))
+                        {
+                            dst.copy_from_slice(src);
+                        }
+                    }
+                    self.emit(Event::ServerPath { key });
+                }
+                PayloadType::REQ | PayloadType::TXT_MSG => {
+                    let mut data = heapless::Vec::new();
+                    let _ = data.extend_from_slice(plain);
+                    let mut in_path = heapless::Vec::new();
+                    let _ = in_path.extend_from_slice(pkt.path());
+                    self.emit(Event::ServerPeer {
+                        key,
+                        ptype,
+                        data,
+                        flood: pkt.header.route.is_flood(),
+                        in_path_len: pkt.path_len.byte(),
+                        in_path,
+                        region,
+                    });
+                }
+                _ => {}
+            }
+            return true;
+        }
+        false
     }
 
     /// REQ, RESPONSE, TXT_MSG or PATH for us: try each contact with the matching hash.
@@ -863,7 +934,13 @@ impl Node {
             snr4,
             name,
             location: ad.location,
+            ts,
+            shared: pkt.transport == Some([0, 0]),
         });
+        // A server keeps no contacts from adverts (its clients log in).
+        if self.routing.is_some() {
+            return;
+        }
         let epoch = self.rtc.now(now);
         let mut slot = self.contacts.find(key);
         if let Some(s) = slot

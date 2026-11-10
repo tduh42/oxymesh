@@ -1,0 +1,19 @@
+[package]
+name = "mc-server"
+description = "MeshCore server roles (repeater, room server) on top of mc-node: access list, login, requests, neighbours, discovery, adverts, console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mc-core.workspace = true
+mc-air.workspace = true
+mc-node.workspace = true
+heapless.workspace = true
+rand_core.workspace = true
+
+[lints]
+workspace = true

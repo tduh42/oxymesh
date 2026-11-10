@@ -56,10 +56,13 @@ fn world(clock: u32) -> World {
     for i in [alice, bob, relay] {
         w.link(me, i);
     }
-    // The relay answers like a MeshCore repeater: discovery, login (admin password "secret",
-    // guests without one), status, neighbours.
+    // The relay is a repeater (mc-server): discovery, login (admin password "secret", guests
+    // without one), status, neighbours (another repeater, out of our range), console.
     w.serve_repeater(relay, "secret", "");
     w.link(relay, bob);
+    let col = w.add("Relay Col", |_| {});
+    w.serve_repeater(col, "secret", "");
+    w.link(relay, col);
     let mut frame = [0u8; 8];
     if let Ok(n) = (Command::SetDeviceTime { unix_s: clock }).encode(&mut frame) {
         w.app(ME, &frame[..n]);

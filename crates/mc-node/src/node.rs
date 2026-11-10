@@ -314,6 +314,11 @@ pub enum Event {
         snr4: i8,
         /// Advertised name, 0x00-padded (cut to 31 bytes).
         name: [u8; 32],
+        /// The advert's own timestamp.
+        ts: u32,
+        /// Sent "to nowhere" (transport codes {0, 0}, `isShare`): a shared advert, not a
+        /// neighbour's own.
+        shared: bool,
         /// Degrees × 1e6.
         location: Option<(i32, i32)>,
     },
@@ -345,6 +350,25 @@ pub enum Event {
         ts: u32,
         data: Text,
         flood: bool,
+        /// The path it came by (a flooded reply returns it in a PATH) and its region.
+        in_path_len: u8,
+        in_path: heapless::Vec<u8, PATH_MAX>,
+        region: Option<u16>,
+    },
+    /// Server mode: a REQ or TXT_MSG from a client (`onPeerDataRecv`), decrypted, left to the
+    /// server role whole: no acknowledgement, no message event.
+    ServerPeer {
+        key: [u8; PUB_KEY_LEN],
+        ptype: PayloadType,
+        data: heapless::Vec<u8, 184>,
+        flood: bool,
+        in_path_len: u8,
+        in_path: heapless::Vec<u8, PATH_MAX>,
+        region: Option<u16>,
+    },
+    /// Server mode: a client sent its path (`onPeerPathRecv`); it is stored, nothing goes back.
+    ServerPath {
+        key: [u8; PUB_KEY_LEN],
     },
     RawData {
         snr4: i8,
@@ -409,12 +433,16 @@ pub struct Node {
     pub prefs: Prefs,
     pub rtc: Rtc,
     pub disp: Dispatcher,
-    pub(crate) seen: Seen,
+    pub seen: Seen,
     pub contacts: Contacts,
     /// Keep-alive connections to servers (`HAS_CONNECTION`).
     pub connections: crate::connections::Connections,
     /// How a server forwards; `None` for a companion, which forwards when `prefs.repeat` says.
+    /// Set, the node is a server: received requests, messages, paths and adverts are left to
+    /// the server role (`Event::ServerPeer`, `ServerPath`, `AdvertHeard`).
     pub routing: Option<Routing>,
+    /// Advert type (`ADV_TYPE_*`): chat for a companion, repeater or room for a server.
+    pub advert_kind: u8,
     /// Region of the last packet received (`recv_pkt_region`): `Some(0)` the wildcard.
     pub last_rx_region: Option<u16>,
     pub channels: Channels,
@@ -465,6 +493,7 @@ impl Node {
             connections: crate::connections::Connections::new(),
             routing: None,
             last_rx_region: None,
+            advert_kind: mc_air::advert::TYPE_CHAT,
             channels: Channels::new(),
             acks: [None; ACK_TABLE],
             next_ack: 0,
@@ -594,12 +623,25 @@ impl Node {
     // ----------------------------------------------------------------------------- transmit
 
     /// `sendFlood`: empty path with hashes of the configured size, priority 1 (PATH 2, ADVERT 3).
-    pub(crate) fn send_flood(
+    pub fn send_flood(
+        &mut self,
+        pkt: PacketBuf,
+        transport: Option<[u16; 2]>,
+        delay_ms: u64,
+        now: Instant,
+    ) {
+        let size = self.prefs.path_hash_size();
+        self.send_flood_sized(pkt, transport, delay_ms, now, size);
+    }
+
+    /// `sendFlood` with the path hash size given (a server's reply uses its request's).
+    pub fn send_flood_sized(
         &mut self,
         mut pkt: PacketBuf,
         transport: Option<[u16; 2]>,
         delay_ms: u64,
         now: Instant,
+        size: u8,
     ) {
         if pkt.header.ptype == PayloadType::TRACE {
             return;
@@ -610,7 +652,6 @@ impl Node {
             Route::Flood
         };
         pkt.transport = transport;
-        let size = self.prefs.path_hash_size();
         if let Ok(pl) = PathLen::new(size, 0) {
             let _ = pkt.set_path(pl, &[]);
         }
@@ -646,7 +687,7 @@ impl Node {
     }
 
     /// `sendDirect`: the given path, priority 0 (PATH 1).
-    pub(crate) fn send_direct(
+    pub fn send_direct(
         &mut self,
         mut pkt: PacketBuf,
         path_len: u8,
@@ -715,12 +756,7 @@ impl Node {
 
     /// Flood retransmit delay (`MyMesh::getRetransmitDelay`): `rand[0, 5t]`,
     /// `t = airtime(path + payload + 2) × tx_delay`.
-    pub(crate) fn retransmit_delay(
-        &self,
-        pkt: &PacketBuf,
-        factor_milli: u32,
-        rng: &mut impl Rng,
-    ) -> u64 {
+    pub fn retransmit_delay(&self, pkt: &PacketBuf, factor_milli: u32, rng: &mut impl Rng) -> u64 {
         let t = self
             .prefs
             .radio

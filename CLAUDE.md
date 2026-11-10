@@ -40,6 +40,7 @@ crates/
   mc-proto/   no_std  companion protocol (docs/spec/companion.md), both directions; Strict (app) and Device decoding
   mc-node/    no_std  the state machine: dispatcher, mesh, chat, companion, settings; persistence as StoreOp
   mc-spiffs/  no_std  read-only SPIFFS reader and importers for the C++ firmware
+  mc-server/  no_std  server roles on a node in server mode (docs/spec/server.md, ADR-0010): access list, logins, requests, console, neighbours, discovery, adverts
   mc-ui/      no_std  200×200 screens (docs/spec/ui.md) on Ratatui + mousefood, with alloc (ADR-0008); gestures, e-paper refresh policy; 128×64 status pages
   mc-sim/     std     simple simulated radio linking several mc-node instances
   mc-cli/     std     `mc` binary: info, probe, sniff, inject, emu, conform, spiffs, ui
@@ -90,7 +91,7 @@ Each milestone is committed once finished and tested. Done: MC0–MC7 (plus U0�
 7. **MC7** — new e-paper interface.
 8. **MC8** — 24 h endurance run on the network, and measurements (`docs/measurements.md`).
 
-Later: repeater and room server roles, Heltec V4, nRF52 (ThinkNode M1, T-Echo), light sleep.
+In progress: the repeater (S1, `mc-server`), then the room server (S2). Later: nRF52 (ThinkNode M1, T-Echo), light sleep.
 
 ## 6. Do not
 

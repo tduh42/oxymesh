@@ -2,11 +2,11 @@
 source: crates/mc-ui/tests/tools.rs
 expression: r.draw()
 ---
-|Packets 3               18:35 80%|
+|Packets 4               18:35 80%|
 |► 18:33 ADV  D0           10.0 dB|
 |  18:33 ADV  D0           10.0 dB|
 |  18:33 ADV  D0           10.0 dB|
-|                                 |
+|  18:33 ADV  D0           10.0 dB|
 |                                 |
 |                                 |
 |                                 |

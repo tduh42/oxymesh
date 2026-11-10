@@ -18,6 +18,7 @@ mc-core = { path = "crates/mc-core" }
 mc-air = { path = "crates/mc-air" }
 mc-proto = { path = "crates/mc-proto" }
 mc-node = { path = "crates/mc-node" }
+mc-server = { path = "crates/mc-server" }
 mc-sim = { path = "crates/mc-sim" }
 mc-nmea = { path = "crates/mc-nmea" }
 mc-spiffs = { path = "crates/mc-spiffs" }

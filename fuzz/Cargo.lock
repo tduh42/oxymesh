@@ -296,6 +296,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-server"
+version = "0.0.0"
+dependencies = [
+ "heapless",
+ "mc-air",
+ "mc-core",
+ "mc-node",
+ "rand_core",
+]
+
+[[package]]
 name = "mc-spiffs"
 version = "0.0.0"
 dependencies = [
@@ -309,12 +320,14 @@ dependencies = [
 name = "oxymesh-fuzz"
 version = "0.0.0"
 dependencies = [
+ "heapless",
  "libfuzzer-sys",
  "mc-air",
  "mc-core",
  "mc-nmea",
  "mc-node",
  "mc-proto",
+ "mc-server",
  "mc-spiffs",
  "rand_chacha",
 ]

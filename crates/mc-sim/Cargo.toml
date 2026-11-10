@@ -13,6 +13,7 @@ mc-core.workspace = true
 mc-air.workspace = true
 mc-node = { workspace = true, features = ["tap"] }
 mc-proto.workspace = true
+mc-server.workspace = true
 rand_core.workspace = true
 rand_chacha.workspace = true
 

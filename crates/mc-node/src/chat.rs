@@ -227,11 +227,12 @@ impl Node {
         Ok(())
     }
 
-    /// Our advert (`createSelfAdvert`): chat type, name, position if the policy allows it.
+    /// Our advert (`createSelfAdvert`): our type (`advert_kind`), name, position if the policy
+    /// allows it.
     pub fn self_advert(&self, now: Instant) -> Result<PacketBuf, SendError> {
         let name = self.prefs.name;
         let ad = AppData {
-            kind: mc_air::advert::TYPE_CHAT,
+            kind: self.advert_kind,
             location: (self.prefs.advert_loc_policy != 0).then_some(self.position()),
             feat1: None,
             feat2: None,

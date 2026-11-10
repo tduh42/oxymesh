@@ -4,10 +4,10 @@ expression: r.draw()
 ---
 |Airtime         18:35 80%|
 |TX total            0.7 s|
-|RX total            2.3 s|
+|RX total            3.2 s|
 |TX last hour        0.7 s|
 |Queue                   0|
-|Sent / received       1/3|
+|Sent / received       1/4|
 |                         |
 |Duty 0.02% of 10.0% (g3) |
 |·························|

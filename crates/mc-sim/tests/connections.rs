@@ -21,7 +21,7 @@ fn login_then_has(keep_alive: u8) -> (bool, bool) {
     let relay = w.add("relay", |_| {});
     w.link(me, relay);
     w.serve_repeater(relay, "secret", "");
-    w.nodes[relay].server.as_mut().unwrap().keep_alive = keep_alive;
+    w.nodes[relay].server.as_mut().unwrap().legacy_keep_alive = keep_alive;
     ask(&mut w, me, &Command::DeviceQuery { app_ver: APP_VER });
     let now = w.now;
     w.node(relay).send_self_advert(now, false).unwrap();
