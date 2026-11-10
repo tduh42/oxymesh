@@ -6,7 +6,7 @@ use mc_core::Instant;
 use mc_node::cli::Reply;
 use mc_node::persist::{PREFS_RECORD, decode_prefs};
 use mc_node::{Node, Prefs};
-use mc_server::Repeater;
+use mc_server::Server;
 use mc_server::persist::{
     CLIENT_RECORD, SETTINGS_RECORD, ServerStore, decode_client, decode_settings, encode_settings,
 };
@@ -40,12 +40,12 @@ impl ServerStore for Mem {
     }
 }
 
-fn fresh(now: Instant) -> (Node, Repeater) {
+fn fresh(now: Instant) -> (Node, Server) {
     let id = LocalIdentity::from_seed(&[3; 32]);
     let prefs = Prefs::defaults(id.pub_key());
     (
         Node::new(id, prefs, 1_793_900_000, now),
-        Repeater::new(now, "v1.18.0-oxymesh"),
+        Server::new(now, "v1.18.0-oxymesh", mc_server::Role::Repeater),
     )
 }
 
@@ -96,9 +96,9 @@ fn settings_clients_and_regions_come_back() {
 
     let mut st = Mem::default();
     for a in [
-        mc_server::repeater::Action::SavePrefs,
-        mc_server::repeater::Action::SaveAcl,
-        mc_server::repeater::Action::SaveRegions,
+        mc_server::server::Action::SavePrefs,
+        mc_server::server::Action::SaveAcl,
+        mc_server::server::Action::SaveRegions,
     ] {
         assert!(r.save(&node, a, &mut st));
     }
@@ -162,7 +162,7 @@ fn a_cpp_client_record_reads_without_its_secret() {
 
 #[test]
 fn unknown_settings_are_ignored() {
-    let mut p = mc_server::repeater::ServerPrefs::default();
+    let mut p = mc_server::server::ServerPrefs::default();
     let mut r = mc_node::node::Routing::REPEATER;
     let mut rec = encode_settings(&p, &r);
     rec[0] = 9;

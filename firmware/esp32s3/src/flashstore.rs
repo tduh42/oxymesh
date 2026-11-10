@@ -19,7 +19,7 @@ use mc_node::persist::{
 };
 use mc_node::region::{FILE_ENTRY, FILE_HEADER, FILE_MAX, MAX as REGIONS_MAX};
 use mc_node::{Device, Node};
-use mc_server::Repeater;
+use mc_server::Server;
 use mc_server::persist::{CLIENT_RECORD, SETTINGS_RECORD, ServerStore};
 use sequential_storage::cache::{Cache, Uncached};
 use sequential_storage::map::{MapConfig, MapStorage};
@@ -305,8 +305,8 @@ impl<S: NorFlash> FlashStore<S> {
     }
 
     /// Erases the whole partition (`FACTORY_RESET`).
-    /// A server's records back into `node` and `r` (before `Repeater::start`).
-    pub fn load_server(&mut self, node: &mut Node, r: &mut Repeater) {
+    /// A server's records back into `node` and `r` (before `Server::start`).
+    pub fn load_server(&mut self, node: &mut Node, r: &mut Server) {
         let mut b = [0u8; PREFS_RECORD];
         if let Some(n) = self.get(KEY_PREFS, &mut b)
             && n >= PREFS_RECORD_V1

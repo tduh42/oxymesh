@@ -27,6 +27,7 @@ The companion's `Device` (app link, message queue, contacts from adverts) has no
   
   It works on `&mut Node` and has no IO. A runner feeds it the node's events and calls `tick`.
 - **A logged-in client is also a node contact**, so that the node's decryption and path storage serve both roles. The access list holds what is the server's own: role, last timestamp, last activity.
+- **One `Server`, with a `Role`** (repeater or room server). The two C++ servers share their settings, access list, console, storage, adverts and timers. What differs is in `mc_server::server` (repeater) and `mc_server::room`: logins, requests, neighbours and discovery, posts and pushes. A room server's pushes wait for ACKs, which the node reports from a list the server fills (`Node::server_acks`).
 - **The simulator's repeater is `mc-server`.** It replaces the stand-in in `mc-sim/src/server.rs`, which reported firmware level 1 and gave guests role 1, where v1.18 gives 2 and 0.
 
 ## Consequences

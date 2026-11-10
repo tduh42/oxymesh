@@ -195,7 +195,11 @@ impl Node {
                     .map(u32::from_le_bytes)
             {
                 // An ACK for us is not relayed (`markDoNotRetransmit` in `onAckRecv`).
-                ours = self.process_ack(now, crc).is_some();
+                ours = if self.routing.is_some() {
+                    self.server_ack(crc)
+                } else {
+                    self.process_ack(now, crc).is_some()
+                };
             }
             let size = usize::from(pkt.path_len.hash_size());
             if self.self_hash_matches(pkt.path().get(..size).unwrap_or(&[0xFF; 4]))
@@ -252,7 +256,9 @@ impl Node {
                 if !self.seen.check_and_mark(&hash, direct) {
                     return;
                 }
-                if let Some(key) = self.process_ack(now, crc) {
+                if self.routing.is_some() {
+                    do_not_retransmit = self.server_ack(crc);
+                } else if let Some(key) = self.process_ack(now, crc) {
                     do_not_retransmit = true;
                     self.return_path_retry(now, &key, pkt);
                 }
@@ -369,7 +375,11 @@ impl Node {
                             .and_then(|b| b.try_into().ok())
                             .map(u32::from_le_bytes)
                     {
-                        let _ = self.process_ack(now, crc);
+                        if self.routing.is_some() {
+                            self.server_ack(crc);
+                        } else {
+                            let _ = self.process_ack(now, crc);
+                        }
                     }
                 }
                 return;
@@ -486,6 +496,16 @@ impl Node {
                         }
                     }
                     self.emit(Event::ServerPath { key });
+                    // An ACK riding with the path (`onPeerPathRecv`, `processAck`).
+                    if pp.extra_type == PayloadType::ACK.value()
+                        && let Some(crc) = pp
+                            .extra
+                            .get(..4)
+                            .and_then(|b| b.try_into().ok())
+                            .map(u32::from_le_bytes)
+                    {
+                        self.server_ack(crc);
+                    }
                 }
                 PayloadType::REQ | PayloadType::TXT_MSG => {
                     let mut data = heapless::Vec::new();
@@ -861,6 +881,17 @@ impl Node {
 
     /// Looks up the ack in the table; if found, sends a `SEND_CONFIRMED` notification and clears
     /// it (`MyMesh::processAck`). Returns the contact's key.
+    /// Server mode: an ACK the server waits for (`Node::server_acks`)? Taken off and
+    /// reported.
+    pub(crate) fn server_ack(&mut self, crc: u32) -> bool {
+        let Some(i) = self.server_acks.iter().position(|&a| a == crc) else {
+            return false;
+        };
+        self.server_acks.swap_remove(i);
+        self.emit(Event::ServerAck { crc });
+        true
+    }
+
     pub(crate) fn process_ack(&mut self, now: Instant, crc: u32) -> Option<[u8; PUB_KEY_LEN]> {
         for slot in self.acks.iter_mut() {
             if let Some(e) = slot

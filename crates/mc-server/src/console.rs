@@ -17,7 +17,7 @@ use mc_node::region::{DENY_FLOOD, is_name_char};
 use rand_core::Rng;
 
 use crate::acl;
-use crate::repeater::{Action, ROLE, Repeater};
+use crate::server::{Action, Role, Server};
 
 /// `MIN_LOCAL_ADVERT_INTERVAL`, minutes.
 const MIN_LOCAL_ADVERT_MINS: u32 = 60;
@@ -147,7 +147,7 @@ pub fn valid_private_key(prv: &[u8; PRV_KEY_LEN]) -> Option<LocalIdentity> {
     (ss1 == ss2 && ss1.iter().any(|&b| b != 0)).then_some(id)
 }
 
-impl Repeater {
+impl Server {
     /// One console line (`handleCommand`). `ts` is the sender's timestamp, 0 from the serial
     /// port; `serial` receives what the C++ prints there directly (`get acl`).
     #[allow(clippy::too_many_arguments)]
@@ -211,7 +211,22 @@ impl Repeater {
                 }
                 let _ = serial.write_str("\n");
             }
-        } else if let Some(sub) = c.strip_prefix("discover.neighbors") {
+        } else if self.role == Role::Room && c.starts_with("room.post") {
+            // `room.post {text}`: a post by the room itself.
+            let msg = c.get(9..).unwrap_or("").trim_start_matches(' ');
+            if msg.is_empty() {
+                let _ = out.push_str("ERR empty message");
+            } else {
+                let id = *node.id.pub_key();
+                self.add_post(node, &id, msg, now);
+                let _ = out.push_str("OK");
+            }
+        } else if self.role == Role::Room && c.starts_with("set repeat on") {
+            let _ = out.push_str("ERR - repeat now deprecated");
+        } else if let Some(sub) = c
+            .strip_prefix("discover.neighbors")
+            .filter(|_| self.role == Role::Repeater)
+        {
             if sub.trim_start_matches(' ').is_empty() {
                 self.discover(node, now, rng);
                 let _ = out.push_str("OK - Discover sent");
@@ -242,12 +257,12 @@ impl Repeater {
             Some(put) => {
                 // A client removed, or evicted to make room: no longer a contact.
                 if let acl::Put::Evicted(_, gone) = put {
-                    crate::repeater::forget_contact(node, &gone);
+                    crate::server::forget_contact(node, &gone);
                 }
                 if perms & acl::ROLE_MASK != acl::GUEST
                     && let Ok(full) = <[u8; PUB_KEY_LEN]>::try_from(k as &[u8])
                 {
-                    crate::repeater::ensure_contact(node, &full);
+                    crate::server::ensure_contact(node, &full);
                 }
                 self.save_acl_soon(now);
                 let _ = out.push_str("OK");
@@ -615,7 +630,7 @@ impl Repeater {
             w(out, "> ");
             push_hex(out, node.id.pub_key());
         } else if k.starts_with("role") {
-            let _ = write!(out, "> {ROLE}");
+            let _ = write!(out, "> {}", self.role.name());
         } else if k.starts_with("bridge.type") {
             w(out, "> none");
         } else if k.starts_with("bootloader.ver") || k.starts_with("adc.multiplier") {

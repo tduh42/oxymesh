@@ -1,11 +1,13 @@
-//! The repeater (`examples/simple_repeater/MyMesh.cpp`, MeshCore v1.18, MIT;
-//! `docs/spec/server.md` §2): logins, requests from logged-in clients, the console for admins,
-//! anonymous requests, neighbours, discovery answers and its adverts. Forwarding itself is the
-//! node's (`Node::routing`).
+//! A MeshCore server (MeshCore v1.18, MIT; `docs/spec/server.md`): the repeater
+//! (`examples/simple_repeater/MyMesh.cpp`, §2) or the room server
+//! (`examples/simple_room_server`, §3, in `crate::room`). What both do is here: logins,
+//! requests from logged-in clients, the console for admins, adverts, settings and timers; the
+//! repeater adds anonymous requests, neighbours and discovery. Forwarding itself is the node's
+//! (`Node::routing`).
 
 use core::fmt::Write;
 
-use mc_air::advert::TYPE_REPEATER;
+use mc_air::advert::{TYPE_REPEATER, TYPE_ROOM};
 use mc_air::crypto::{PRV_KEY_LEN, PUB_KEY_LEN};
 use mc_air::{PacketBuf, PathLen, PayloadType, Route as AirRoute};
 use mc_core::{Duration, Instant};
@@ -23,12 +25,47 @@ use crate::limiter::RateLimiter;
 use crate::neighbours::Neighbours;
 use crate::reply::{self, Request, Route};
 
-/// `FIRMWARE_VER_LEVEL`.
-pub const FW_VER_LEVEL: u8 = 2;
-/// `FIRMWARE_ROLE`.
-pub const ROLE: &str = "repeater";
+/// Which server (`FIRMWARE_ROLE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Repeater,
+    Room,
+}
+
+impl Role {
+    /// `FIRMWARE_ROLE` (`get role`).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Role::Repeater => "repeater",
+            Role::Room => "room_server",
+        }
+    }
+
+    /// `FIRMWARE_VER_LEVEL` (login reply).
+    pub const fn fw_level(self) -> u8 {
+        match self {
+            Role::Repeater => 2,
+            Role::Room => 1,
+        }
+    }
+
+    /// `ADV_TYPE_*` in its adverts.
+    pub const fn advert_kind(self) -> u8 {
+        match self {
+            Role::Repeater => TYPE_REPEATER,
+            Role::Room => TYPE_ROOM,
+        }
+    }
+
+    /// Its forwarding rules out of the box: a room server forwards nothing.
+    pub const fn routing(self) -> Routing {
+        let mut r = Routing::REPEATER;
+        r.disable_fwd = matches!(self, Role::Room);
+        r
+    }
+}
 /// `RESP_SERVER_LOGIN_OK`.
-const LOGIN_OK: u8 = 0;
+pub(crate) const LOGIN_OK: u8 = 0;
 const REQ_STATUS: u8 = 0x01;
 const REQ_TELEMETRY: u8 = 0x03;
 const REQ_ACCESS_LIST: u8 = 0x05;
@@ -48,7 +85,7 @@ const BOOT_ADVERT_MS: u64 = 16_000;
 /// How long discovery answers are taken after our request.
 const DISCOVER_WINDOW_MS: u64 = 60_000;
 /// `MAX_PACKET_PAYLOAD`: room for a reply.
-const REPLY_MAX: usize = 184;
+pub(crate) const REPLY_MAX: usize = 184;
 /// The neighbours list in a NEIGHBOURS reply.
 const NEIGHBOURS_MAX: usize = 130;
 
@@ -160,7 +197,8 @@ pub struct Board {
 }
 
 #[derive(Debug)]
-pub struct Repeater {
+pub struct Server {
+    pub role: Role,
     pub prefs: ServerPrefs,
     pub acl: Acl,
     pub neighbours: Neighbours,
@@ -183,20 +221,26 @@ pub struct Repeater {
     /// `region load` in progress, into `temp_regions`.
     pub(crate) region_load: Option<crate::console::RegionLoad>,
     pub(crate) temp_regions: RegionMap,
+    /// The room server's posts and pushes.
+    pub room: crate::room::Room,
 }
 
-/// The node's settings a repeater starts from (`MyMesh.cpp:893-929`).
-pub fn default_node_prefs(p: &mut mc_node::Prefs) {
+/// The node's settings a server starts from (repeater `MyMesh.cpp:893-929`, room server
+/// `MyMesh.cpp:648-694`): the room server's direct retransmit delay factor is 0.2, not 0.3.
+pub fn default_node_prefs(p: &mut mc_node::Prefs, role: Role) {
     p.airtime_factor_milli = 1000;
     p.rx_delay_base_milli = 0;
     p.tx_delay_milli = 500;
-    p.direct_tx_delay_milli = 300;
+    p.direct_tx_delay_milli = match role {
+        Role::Repeater => 300,
+        Role::Room => 200,
+    };
     p.interference_threshold = 0;
     p.cad_enabled = false;
     p.advert_loc_policy = 2; // ADVERT_LOC_PREFS
 }
 
-fn le32(b: &[u8], i: usize) -> u32 {
+pub(crate) fn le32(b: &[u8], i: usize) -> u32 {
     let mut a = [0u8; 4];
     for (o, v) in a.iter_mut().zip(b.iter().skip(i)) {
         *o = *v;
@@ -205,20 +249,21 @@ fn le32(b: &[u8], i: usize) -> u32 {
 }
 
 /// A client's stored path, or a flood.
-fn direct_or_flood(p: &Option<(u8, heapless::Vec<u8, 64>)>) -> Route<'_> {
+pub(crate) fn direct_or_flood(p: &Option<(u8, heapless::Vec<u8, 64>)>) -> Route<'_> {
     match p {
         Some((len, p)) => Route::OutPath(*len, p),
         None => Route::Flood,
     }
 }
 
-fn c_str(b: &[u8]) -> &[u8] {
+pub(crate) fn c_str(b: &[u8]) -> &[u8] {
     mc_node::contacts::name_str(b)
 }
 
-impl Repeater {
-    pub fn new(now: Instant, version: &'static str) -> Self {
+impl Server {
+    pub fn new(now: Instant, version: &'static str, role: Role) -> Self {
         Self {
+            role,
             prefs: ServerPrefs::default(),
             acl: Acl::new(),
             neighbours: Neighbours::new(),
@@ -236,6 +281,7 @@ impl Repeater {
             temp_radio: None,
             region_load: None,
             temp_regions: RegionMap::new(),
+            room: crate::room::Room::new(),
         }
     }
 
@@ -266,20 +312,23 @@ impl Repeater {
             self.next_flood_advert,
             self.save_acl_at,
             temp,
+            (self.role == Role::Room)
+                .then_some(self.room.next_push)
+                .flatten(),
         ]
         .into_iter()
         .flatten()
         .min()
     }
 
-    /// Puts the node in repeater mode (keeping routing rules already loaded), puts the clients
+    /// Puts the node in server mode (keeping routing rules already loaded), puts the clients
     /// in its contact table, starts the advert timers and schedules the boot advert
     /// (`MyMesh::begin`, `main.cpp:117-120`).
     pub fn start(&mut self, node: &mut Node, now: Instant) {
         if node.routing.is_none() {
-            node.routing = Some(Routing::REPEATER);
+            node.routing = Some(self.role.routing());
         }
-        node.advert_kind = TYPE_REPEATER;
+        node.advert_kind = self.role.advert_kind();
         for c in self.acl.clients.clone() {
             ensure_contact(node, &c.key);
         }
@@ -333,7 +382,10 @@ impl Repeater {
     }
 
     /// The loop's timers (`MyMesh::loop`): adverts, the lazy access-list save.
-    pub fn tick(&mut self, node: &mut Node, now: Instant) {
+    pub fn tick(&mut self, node: &mut Node, now: Instant, rng: &mut impl Rng) {
+        if self.role == Role::Room {
+            self.room_tick(node, now, rng);
+        }
         if self.next_flood_advert.is_some_and(|t| now >= t) {
             self.send_advert(node, now, 0, true);
             self.update_flood_advert_timer(now);
@@ -378,7 +430,10 @@ impl Repeater {
                     in_path,
                     region: *region,
                 };
-                self.on_anon(node, &req, *ts, data, now, rng);
+                match self.role {
+                    Role::Repeater => self.on_anon(node, &req, *ts, data, now, rng),
+                    Role::Room => self.room_login(node, &req, *ts, data, now, rng),
+                }
             }
             Event::ServerPeer {
                 key,
@@ -396,13 +451,21 @@ impl Repeater {
                     in_path,
                     region: *region,
                 };
-                self.on_peer(node, &req, *ptype, data, now, rng);
+                match self.role {
+                    Role::Repeater => self.on_peer(node, &req, *ptype, data, now, rng),
+                    Role::Room => self.room_peer(node, &req, *ptype, data, now, rng),
+                }
             }
             Event::ServerPath { key } => {
                 if let Some(i) = self.acl.get(key)
                     && let Some(c) = self.acl.clients.get_mut(i)
                 {
                     c.last_activity = clock;
+                }
+            }
+            Event::ServerAck { crc } => {
+                if self.role == Role::Room {
+                    self.room_ack(*crc);
                 }
             }
             Event::AdvertHeard {
@@ -416,11 +479,11 @@ impl Repeater {
             } => {
                 // Zero-hop repeater adverts, not shares (`onAdvertRecv`).
                 let hops = PathLen::from_byte(*path_len).map_or(1, |p| p.hops());
-                if hops == 0 && !*shared && *kind == TYPE_REPEATER {
+                if self.role == Role::Repeater && hops == 0 && !*shared && *kind == TYPE_REPEATER {
                     self.neighbours.put(key, *ts, clock, *snr4);
                 }
             }
-            Event::ControlData { snr4, data, .. } => {
+            Event::ControlData { snr4, data, .. } if self.role == Role::Repeater => {
                 self.on_control(node, *snr4, data, now, rng);
             }
             _ => {}
@@ -573,11 +636,11 @@ impl Repeater {
         let _ = out.push(u8::from(c.is_admin()));
         let _ = out.push(c.permissions);
         let _ = out.extend_from_slice(&rng.next_u32().to_le_bytes());
-        let _ = out.push(FW_VER_LEVEL);
+        let _ = out.push(self.role.fw_level());
         true
     }
 
-    fn client_path(
+    pub(crate) fn client_path(
         &self,
         node: &Node,
         key: &[u8; PUB_KEY_LEN],
@@ -705,7 +768,7 @@ impl Repeater {
     }
 
     /// `handleRequest`: the reply after the tag, false for an unknown or refused request.
-    fn request(
+    pub(crate) fn request(
         &mut self,
         node: &mut Node,
         client: &acl::Client,
@@ -738,10 +801,20 @@ impl Repeater {
                 w(&i16::from(node.last_snr4).to_le_bytes());
                 w(&(node.seen.direct_dups as u16).to_le_bytes());
                 w(&(node.seen.flood_dups as u16).to_le_bytes());
-                w(&u32::try_from(s.rx_airtime_ms / 1000)
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes());
-                w(&s.recv_errors.to_le_bytes());
+                match self.role {
+                    // `RepeaterStats`: 56 bytes.
+                    Role::Repeater => {
+                        w(&u32::try_from(s.rx_airtime_ms / 1000)
+                            .unwrap_or(u32::MAX)
+                            .to_le_bytes());
+                        w(&s.recv_errors.to_le_bytes());
+                    }
+                    // `ServerStats`: 52 bytes, posts stored and pushed last.
+                    Role::Room => {
+                        w(&self.room.posted.to_le_bytes());
+                        w(&self.room.pushes.to_le_bytes());
+                    }
+                }
                 true
             }
             REQ_TELEMETRY => {
@@ -775,7 +848,15 @@ impl Repeater {
                 if b(1) != 0 || b(2) != 0 {
                     return false;
                 }
-                for c in self.acl.clients.iter().filter(|c| c.permissions != 0) {
+                // The room server lists its admins only.
+                let room = self.role == Role::Room;
+                for c in self.acl.clients.iter().filter(|c| {
+                    if room {
+                        c.is_admin()
+                    } else {
+                        c.permissions != 0
+                    }
+                }) {
                     if out.len() + 7 > REPLY_MAX - 4 {
                         break;
                     }
@@ -784,7 +865,7 @@ impl Repeater {
                 }
                 true
             }
-            REQ_NEIGHBOURS if b(1) == 0 => {
+            REQ_NEIGHBOURS if b(1) == 0 && self.role == Role::Repeater => {
                 let count = usize::from(b(2));
                 let offset = usize::from(u16::from_le_bytes([b(3), b(4)]));
                 let order = b(5);
@@ -807,7 +888,7 @@ impl Repeater {
                 let _ = out.extend_from_slice(&results);
                 true
             }
-            REQ_OWNER_INFO => {
+            REQ_OWNER_INFO if self.role == Role::Repeater => {
                 let mut s: heapless::String<{ REPLY_MAX - 4 }> = heapless::String::new();
                 let name = core::str::from_utf8(c_str(&node.prefs.name)).unwrap_or("");
                 let _ = write!(s, "{}\n{}\n{}", self.version, name, self.prefs.owner_info);
@@ -902,7 +983,7 @@ impl Repeater {
 }
 
 /// Where serial-only output goes when a command came over the air.
-struct Discard;
+pub(crate) struct Discard;
 
 impl Write for Discard {
     fn write_str(&mut self, _: &str) -> core::fmt::Result {

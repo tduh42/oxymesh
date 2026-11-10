@@ -19,7 +19,7 @@ use embedded_graphics::primitives::{Line, PrimitiveStyle};
 use embedded_graphics::text::Text;
 use mc_core::Instant;
 use mc_node::Node;
-use mc_server::Repeater;
+use mc_server::{Role, Server};
 
 use crate::clock;
 use crate::input::{Button, Gesture};
@@ -60,7 +60,7 @@ pub enum Act {
 #[derive(Debug)]
 pub struct View<'a> {
     pub node: &'a Node,
-    pub repeater: &'a Repeater,
+    pub server: &'a Server,
     pub now: Instant,
     pub battery_percent: Option<u8>,
     pub charging: bool,
@@ -128,6 +128,7 @@ impl Pages {
             Page::Home => home(v),
             Page::Radio => radio(v),
             Page::Traffic => traffic(v),
+            Page::Neighbours if v.server.role == Role::Room => posts(v),
             Page::Neighbours => neighbours(v),
             Page::Advert => [
                 String::from("Advert"),
@@ -189,22 +190,45 @@ fn home(v: &View<'_>) -> [String; 5] {
     let t = clock::local(v.node.rtc.now(v.now), v.tz_offset_min);
     let fwd = v.node.routing.as_ref().is_some_and(|r| !r.disable_fwd);
     let acl = v
-        .repeater
+        .server
         .acl
         .clients
         .iter()
         .filter(|c| c.permissions != 0)
         .count();
-    [
-        format!("Repeater   {}", clock::hhmm(t)),
-        String::from(if fwd { "Forwarding" } else { "Forwarding off" }),
-        format!("Up {}", duration(v.repeater.uptime_secs(v.now))),
-        format!(
-            "Logins {acl}  Nbrs {}",
-            v.repeater.neighbours.iter().count()
-        ),
-        String::new(),
-    ]
+    match v.server.role {
+        Role::Repeater => [
+            format!("Repeater   {}", clock::hhmm(t)),
+            String::from(if fwd { "Forwarding" } else { "Forwarding off" }),
+            format!("Up {}", duration(v.server.uptime_secs(v.now))),
+            format!("Logins {acl}  Nbrs {}", v.server.neighbours.iter().count()),
+            String::new(),
+        ],
+        Role::Room => [
+            format!("Room server {}", clock::hhmm(t)),
+            format!(
+                "Posts {}  pushed {}",
+                v.server.room.posted, v.server.room.pushes
+            ),
+            format!("Up {}", duration(v.server.uptime_secs(v.now))),
+            format!("Logins {acl}"),
+            String::new(),
+        ],
+    }
+}
+
+/// The room's newest posts, newest first: `ABCD1234 text`.
+fn posts(v: &View<'_>) -> [String; 5] {
+    let mut out: [String; 5] = Default::default();
+    let all: alloc::vec::Vec<_> = v.server.room.iter().collect();
+    out[0] = format!("Posts {}", all.len());
+    for (slot, p) in out.iter_mut().skip(1).zip(all.iter().rev()) {
+        *slot = format!("{:02X}{:02X} {}", p.author[0], p.author[1], p.text);
+    }
+    if all.is_empty() {
+        out[1] = String::from("No posts yet");
+    }
+    out
 }
 
 fn radio(v: &View<'_>) -> [String; 5] {
@@ -220,7 +244,7 @@ fn radio(v: &View<'_>) -> [String; 5] {
             r.cr
         ),
         format!("TX {} dBm", r.tx_power_dbm),
-        format!("Noise {} dBm", v.repeater.board.noise_floor),
+        format!("Noise {} dBm", v.server.board.noise_floor),
         format!(
             "Air TX {} s RX {} s",
             s.tx_airtime_ms / 1000,
@@ -246,7 +270,7 @@ fn traffic(v: &View<'_>) -> [String; 5] {
 /// The repeaters heard directly, newest first: `ABCD1234 -6.5 3m`.
 fn neighbours(v: &View<'_>) -> [String; 5] {
     let mut out: [String; 5] = Default::default();
-    let sorted = v.repeater.neighbours.sorted(0);
+    let sorted = v.server.neighbours.sorted(0);
     out[0] = format!("Neighbours {}", sorted.len());
     let clock = v.node.rtc.now(v.now);
     for (slot, n) in out.iter_mut().skip(1).zip(sorted.iter()) {

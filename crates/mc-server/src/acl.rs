@@ -2,6 +2,7 @@
 //! permissions. Their paths and shared secrets live in the node's contact table.
 
 use mc_air::crypto::PUB_KEY_LEN;
+use mc_core::Instant;
 
 /// `MAX_CLIENTS`.
 pub const MAX: usize = 32;
@@ -22,6 +23,12 @@ pub struct Client {
     pub last_activity: u32,
     /// Room server: posts already pushed up to this time (our clock).
     pub sync_since: u32,
+    /// Room server: the ACK of the post being pushed (0: none), that post's time, when to
+    /// give up on it, and the pushes given up in a row (`extra.room`).
+    pub pending_ack: u32,
+    pub push_post_timestamp: u32,
+    pub ack_timeout: Instant,
+    pub push_failures: u8,
 }
 
 impl Client {
@@ -32,6 +39,10 @@ impl Client {
             last_timestamp: 0,
             last_activity: 0,
             sync_since: 0,
+            pending_ack: 0,
+            push_post_timestamp: 0,
+            ack_timeout: Instant::ZERO,
+            push_failures: 0,
         }
     }
 

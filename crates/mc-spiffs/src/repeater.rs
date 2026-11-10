@@ -16,7 +16,7 @@ use mc_node::region::{FILE_MAX, RegionMap};
 use mc_server::persist::{
     CPP_CLIENT_RECORD, ServerStore, decode_client, encode_client, encode_settings,
 };
-use mc_server::repeater::{ServerPrefs, default_node_prefs};
+use mc_server::server::{Role, ServerPrefs, default_node_prefs};
 
 use crate::cpp::{ImportError, PREFS, identity, prefs};
 use crate::json::{Value, fixed, unescape, walk};
@@ -148,7 +148,7 @@ fn regions<F: Flash>(fs: &mut Spiffs<F>) -> Result<Option<RegionMap>, Error> {
 pub fn summary<F: Flash>(fs: &mut Spiffs<F>) -> Result<Summary, ImportError> {
     let id = identity(fs)?;
     let mut base = Prefs::defaults(id.pub_key());
-    default_node_prefs(&mut base);
+    default_node_prefs(&mut base, Role::Repeater);
     let p = prefs(fs, &base);
     Ok(Summary {
         name: p.as_ref().map_or([0; 32], |p| p.name),
@@ -165,16 +165,17 @@ pub fn summary<F: Flash>(fs: &mut Spiffs<F>) -> Result<Summary, ImportError> {
 /// them.
 pub fn import<F: Flash>(
     fs: &mut Spiffs<F>,
+    role: Role,
     st: &mut impl ServerStore,
 ) -> Result<Summary, ImportError> {
     let id = identity(fs)?;
     let mut base = Prefs::defaults(id.pub_key());
-    default_node_prefs(&mut base);
+    default_node_prefs(&mut base, role);
     let node = prefs(fs, &base);
     // From a companion only the identity and the node's settings: its `repeat.disable` (on by
     // default there) must not switch forwarding off on the repeater.
     let mut sp = ServerPrefs::default();
-    let mut routing = Routing::REPEATER;
+    let mut routing = role.routing();
     if is_server(fs)? {
         settings(fs, &mut sp, &mut routing);
     }

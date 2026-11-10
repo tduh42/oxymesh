@@ -40,11 +40,11 @@ crates/
   mc-proto/   no_std  companion protocol (docs/spec/companion.md), both directions; Strict (app) and Device decoding
   mc-node/    no_std  the state machine: dispatcher, mesh, chat, companion, settings; persistence as StoreOp
   mc-spiffs/  no_std  read-only SPIFFS reader and importers for the C++ firmware
-  mc-server/  no_std  server roles on a node in server mode (docs/spec/server.md, ADR-0010): access list, logins, requests, console, neighbours, discovery, adverts
+  mc-server/  no_std  server roles on a node in server mode (docs/spec/server.md, ADR-0010): repeater and room server; access list, logins, requests, console, neighbours, discovery, posts, adverts
   mc-ui/      no_std  200×200 screens (docs/spec/ui.md) on Ratatui + mousefood, with alloc (ADR-0008); gestures, e-paper refresh policy; 128×64 status pages
   mc-sim/     std     simple simulated radio linking several mc-node instances
   mc-cli/     std     `mc` binary: info, probe, sniff, inject, emu, conform, spiffs, ui
-firmware/esp32s3/     SEPARATE workspace (Xtensa `esp` toolchain): drivers, the shared runner (`src/run/`, ADR-0009), one binary per board and role (mc-m5, mc-heltec-v4 companions; rpt-m5, rpt-heltec-v4 repeaters)
+firmware/esp32s3/     SEPARATE workspace (Xtensa `esp` toolchain): drivers, the shared runner (`src/run/`, ADR-0009), one binary per board and role (mc-m5, mc-heltec-v4 companions; rpt-m5, rpt-heltec-v4 repeaters; room-m5, room-heltec-v4 room servers, sharing src/bin/server/)
 fuzz/                 cargo-fuzz targets (separate workspace, nightly)
 config/               regions (radio preset + scope) and regulations (TOML, with sources)
 docs/spec/            specifications — source of truth
@@ -91,7 +91,7 @@ Each milestone is committed once finished and tested. Done: MC0–MC7 (plus U0�
 7. **MC7** — new e-paper interface.
 8. **MC8** — 24 h endurance run on the network, and measurements (`docs/measurements.md`).
 
-In progress: the repeater (S1, `mc-server`), then the room server (S2). Later: nRF52 (ThinkNode M1, T-Echo), light sleep.
+Server roles (`mc-server`): the repeater (S1) and the room server (S2), on the M5 and the Heltec V4. Later: nRF52 (ThinkNode M1, T-Echo), light sleep.
 
 ## 6. Do not
 
@@ -116,8 +116,8 @@ cargo run --release -p mc-cli -- info $M5          # query a USB companion
 cargo run --release -p mc-cli -- sniff $REF --channel '#test'   # packets heard, decoded
 cargo run --release -p mc-cli -- airtest --ref $REF --dut $M5   # mc-air against a C++ node, zero-hop
 cargo run --release -p mc-cli -- ui                  # the device interface in a terminal, on a simulated device (--compact; --board heltec-v4)
-scripts/flash.sh m5|heltec-v4|m5-repeater|heltec-v4-repeater <port>   # build and flash a board with its partition table
-cargo run --release -p mc-cli -- term <port> "get role" neighbors    # a repeater's text console (rpt-*, or a C++ repeater)
+scripts/flash.sh m5|heltec-v4|m5-repeater|heltec-v4-repeater|m5-room|heltec-v4-room <port>   # build and flash a board and role
+cargo run --release -p mc-cli -- term <port> "get role" neighbors    # a server's text console (rpt-*, room-*, or a C++ server)
 cargo run --release -p mc-cli -- remote <port> <key prefix> <password> status "get radio"   # log in to a server over the air from a companion
 cargo run --release -p mc-cli -- ui --png local/ui-png   # every screen of the tour as panel-exact PNG
 INSTA_UPDATE=always cargo test -p mc-ui              # accept changed screen snapshots (review the diff!)

@@ -1,6 +1,6 @@
 # Server roles: repeater and room server
 
-The repeater (`examples/simple_repeater/MyMesh.cpp`, "rpt" below) and, later, the room server (`examples/simple_room_server`) of MeshCore v1.18 (`companion-v1.18.0`, 81dbae5; MIT). The C++ code is authoritative. Forwarding itself is in `air.md` §4.6.
+The repeater (`examples/simple_repeater/MyMesh.cpp`, "rpt" below) and the room server (`examples/simple_room_server/MyMesh.cpp`, "room" below) of MeshCore v1.18 (`companion-v1.18.0`, 81dbae5; MIT). The C++ code is authoritative. Forwarding itself is in `air.md` §4.6.
 
 ## 1. How oxymesh splits it (ADR-0010)
 
@@ -8,7 +8,8 @@ The repeater (`examples/simple_repeater/MyMesh.cpp`, "rpt" below) and, later, th
   - forwards by the server rules (`air.md` §4.6);
   - keeps no contacts from adverts. It reports them as `Event::AdvertHeard` (with the advert timestamp and whether it came as a share);
   - hands over, once decrypted, what logged-in clients send: `Event::ServerPeer` for REQ and TXT_MSG, and `Event::ServerPath` for a PATH, whose path it stores in the client's contact entry. Anonymous requests come as `Event::AnonRequest`, with their arrival path and region.
-- `mc-server` (`no_std`, no allocation) holds the role:
+- In server mode the node also keeps the ACKs the server waits for (`Node::server_acks`, a room server's pushes). One that arrives, alone, in a multipart or riding a PATH, is taken off, not relayed (`markDoNotRetransmit`), and reported as `Event::ServerAck`.
+- `mc-server` (`no_std`, no allocation) holds the role in one `Server` with a `Role` (repeater or room):
   - the access list (`acl`, 32 clients) and the neighbours (`neighbours`, 50 slots);
   - the rate limiters, logins, requests and the console;
   - discovery and the advert timers;
@@ -131,9 +132,71 @@ These differences are invisible on the air:
 
 ## 3. Room server
 
-To be written with milestone S2.
+A bulletin board: logged-in clients post plain text, and every post goes to every other client, one at a time, until each acknowledges it (`mc_server::room`). Everything not listed here is as for the repeater: requests and their routes (§2.4), the console (§4), adverts (§2.8), flooded replies (§2.10), storage (§5).
 
-## 4. The repeater console
+| | Room server |
+|---|---|
+| `FIRMWARE_VER_LEVEL`, `FIRMWARE_ROLE` | 1, `room_server` |
+| Advert type | room (3) |
+| Forwarding | off (`disable_fwd`); `set repeat on` answers `ERR - repeat now deprecated` |
+| `direct_tx_delay_factor` | 0.2 |
+| Room password (`guest_password`) | `hello` in the M5 and Heltec builds (`ROOM_PASSWORD`) |
+| Anonymous requests other than the login, neighbours, discovery, `REQ` 0x06 and 0x07 | none |
+| Posts (`MAX_UNSYNCED_POSTS`) | 32 in a ring, 150 characters each, in memory only |
+
+### 3.1 Login (ANON_REQ; room:324-411)
+
+The data after the timestamp is `{sync since (u32 LE)}{password}`: the client's newest post already received.
+
+1. A blank password logs in a client already in the access list.
+2. Otherwise:
+   - the admin password gives admin (3);
+   - the room password gives read-write (2);
+   - with `allow.read.only`, any other password gives guest (0);
+   - without it, there is no answer.
+3. Replay check as for the repeater. Then:
+   - `sync_since` is taken from the request, and the push state is reset;
+   - the access list is saved 5 s later, whatever the role.
+4. The reply is as for the repeater, except:
+   - byte 6 is 1 for an admin, 2 for permissions 0, 0 otherwise;
+   - the firmware level is 1.
+5. Pushes then wait 2 s, so the reply goes first. The route: a PATH back for a flood login, otherwise direct if the path is known, flooded if not.
+
+### 3.2 From a client (TXT_MSG, REQ; room:433-599)
+
+- **TXT_MSG** (types 0, 1, 3; timestamp not older than the last; an equal one is a retry):
+  - the client's activity is updated and its failed pushes reset;
+  - **plain text** from anyone but a guest is a post (unless a retry). It is acknowledged after 200 ms with `SHA256(timestamp ‖ flags ‖ text ‖ client key)[0..4]`:
+    - flooded if the path is unknown;
+    - otherwise direct, preceded by a multipart copy 300 ms earlier when `multi.acks` is on;
+  - **CLI data or command** from an admin is a console command (unless a retry). It gets no ACK. The reply is CLI data with our unique time, sent 300 ms after the ACK's delay (none here), direct or flooded.
+- **REQ** (timestamp not older than the last, an equal one accepted):
+  - **keep-alive** (0x02), direct only. The bytes 5-8 (`{last post time received}`, 0 if missing) move the client's sync point when not 0. Any push waiting for its ACK is dropped. If the client's path is known, the answer is a direct ACK of `SHA256(request[0..9] ‖ client key)[0..4]` followed by one byte: the posts waiting for that client;
+  - **status** (0x01), `ServerStats`, 52 bytes: the repeater's first 48 bytes (§2.4), then posts stored (u16) and pushes sent (u16);
+  - **telemetry** (0x03), as the repeater's;
+  - **access list** (0x05, admin), as the repeater's, but listing admins only.
+
+### 3.3 Pushing posts (room:41-131, 997-1040)
+
+- A post (`storePost`) gets our unique time and goes into the ring. Pushes start 2 s later.
+- **Every round**, when due:
+  1. The waits for ACKs that timed out are given up: the client's failures count up.
+  2. The next client in turn (round robin) is considered if:
+     - no ACK is awaited from it;
+     - it was active since the start (`last_activity` not 0);
+     - its failures are under 3.
+  3. It gets the oldest post that is at least 6 s old, newer than its sync point, and not its own. The next round comes 1.2 s later, or 150 ms if there was nothing to push.
+- **A push** is a TXT_MSG of type signed plain: `{post time}{flags: 2 << 2 | random attempt (0-3)}{author key[0..4]}{text}`.
+  - Its ACK is `SHA256(those bytes ‖ client key)[0..4]`.
+  - With the client's path known, it goes direct, and the wait ends after 4 s + 2 s × (hops + 1). Otherwise it is flooded in the default scope, with hashes of `path_hash_mode + 1` bytes, and the wait ends after 12 s.
+- **The ACK** (`processAck`) ends the wait and moves the client's sync point to the post's time.
+- `room.post {text}` on the console posts as the room itself: `OK`, `ERR empty message`.
+
+### 3.4 Where oxymesh differs
+
+- An ACK the server did not ask for is relayed (or not) as the node's rules say. The C++ asks `processAck` about every ACK, so an ACK matching a push that has already timed out would also be kept back there.
+
+## 4. The console
 
 `mc_server::console` (`Repeater::command`), a port of `MyMesh::handleCommand` (rpt:1198-1287) and `CommonCLI` (`src/helpers/CommonCLI.cpp`). Lines come from admins over the air (§2.5) and from the serial port, where the timestamp is 0. Replies are the C++ texts, at most 160 bytes.
 
@@ -151,13 +214,15 @@ To be written with milestone S2.
    Anything else gets `Unknown command`.
 5. A setting saved from the console also turns off the 2-minute local adverts if `advert.interval` is under 60 minutes (`CommonCLI::savePrefs`). The default of 2 minutes is meant for new installs only.
 
-### 4.2 The repeater's own commands
+### 4.2 Each server's own commands
+
+The room server has `room.post` and refuses `set repeat on` (§3); it has no `discover.neighbors`, which falls to `Unknown command`. `get role` answers `> room_server`.
 
 | Command | Reply, effect |
 |---|---|
 | `setperm {key hex} {permissions}` | role 0 removes a client found by key prefix; any other role needs the whole key, then adds or updates it. `OK`, `Err - bad params`, `Err - bad pubkey`, `Err - invalid params`. The access list is saved 5 s later |
 | `get acl` (serial) | prints `ACL:` and one `{permissions hex} {key hex}` line per client whose permissions are not 0; empty reply |
-| `discover.neighbors` | sends a discovery request (§2.7): `OK - Discover sent`; with anything after it: `Err - discover.neighbors has no options` |
+| `discover.neighbors` (repeater) | sends a discovery request (§2.7): `OK - Discover sent`; with anything after it: `Err - discover.neighbors has no options` |
 
 ### 4.3 Common commands
 
@@ -243,7 +308,7 @@ The runner stores four records under its own keys (`ServerStore`), on the action
 |---|---|
 | node settings | the companion's settings record (`mc_node::persist`): name, position, radio, delays, GPS |
 | repeater settings (164 bytes) | version 1; admin and guest passwords (16 each, NUL padded); owner info (120); `advert_interval`, `flood_advert_interval`; flags: bit 0 `allow_read_only`, bit 1 `powersaving`, bit 2 `disable_fwd`; `flood_max`, `flood_max_unscoped`, `flood_max_advert`, `loop_detect`; `discovery_mod_timestamp` (u32 LE) |
-| access list | per client: the C++ `/s_contacts` record without its last 32 bytes. That is the key (32), permissions, `sync_since` (u32 LE), 2 unused bytes, `out_path_len`, `out_path` (64). Only clients with permissions are kept, as `ClientACL::save` does. Their paths come back as the node contacts' paths |
+| access list | per client: the C++ `/s_contacts` record without its last 32 bytes. That is the key (32), permissions, `sync_since` (u32 LE), 2 unused bytes, `out_path_len`, `out_path` (64). Only clients with permissions are kept, as `ClientACL::save` does; a room server keeps its admins only (`saveFilter`). Their paths come back as the node contacts' paths |
 | regions | the C++ `/regions2` file as is (`mc_node::region`) |
 
 The C++ saves the shared secret with each client. oxymesh derives it again from its own key, as the C++ does on load, so it never stores it.
@@ -265,9 +330,9 @@ A SPIFFS holding `/s_contacts` or `/regions2` is a server's (`is_server`). The i
 
 To be written with milestone S2.
 
-## 6. Firmware (`rpt-m5`, `rpt-heltec-v4`)
+## 6. Firmware (`rpt-*`, `room-*`)
 
-`firmware/esp32s3/src/bin/rpt-*.rs`, on the shared runner (ADR-0009). The radio loop takes a `run::radio::Mesh`: a companion `Device`, or here a bare `Node`. Flash with `scripts/flash.sh m5-repeater|heltec-v4-repeater <port>`.
+`firmware/esp32s3/src/bin/server/{m5,heltec_v4}.rs`, one per board, take the role: `rpt-*` binaries run a repeater, `room-*` binaries a room server. They sit on the shared runner (ADR-0009). The radio loop takes a `run::radio::Mesh`: a companion `Device`, or here a bare `Node`. Flash with `scripts/flash.sh m5-repeater|heltec-v4-repeater|m5-room|heltec-v4-room <port>`.
 
 - **Each pass:**
   1. the serial console;
@@ -276,8 +341,9 @@ To be written with milestone S2.
   4. `Repeater::tick`;
   5. the actions: saves go to the store (`Repeater::save`); the runner handles restarts, power-off, radio changes, the temporary radio and the GPS.
 - **Serial console** (`run::server::Console`, `main.cpp:155-190`):
-  - at boot it prints `Repeater ID: {key hex}`;
-  - every character is echoed, `\n` is dropped and `\r` ends the line (as does the 159th character);
+  - at boot it prints `Repeater ID: {key hex}` (`Room ID: …`);
+  - every character is echoed, `\n` is dropped and `\r` ends the line (as does the 159th character, the 151st for a room server);
+  - the repeater echoes a new line after the command, the room server the `\n` it is sent;
   - a non-empty reply is printed as `  -> {reply}`.
 
   On the M5 it runs on UART0 (CH340, 115,200 baud), on the Heltec on the chip's own USB. `mc term <port> "line" …` sends lines and prints what comes back.
@@ -287,7 +353,7 @@ To be written with milestone S2.
 
 | | ThinkNode M5 | Heltec V4 |
 |---|---|---|
-| Name at first start (`ADVERT_NAME`) | `Thinknode M5 Repeater` | `Heltec Repeater` |
+| Name at first start (`ADVERT_NAME`) | `Thinknode M5 Repeater`, `Thinknode M5 Room Server` | `Heltec Repeater`, `Heltec Room` |
 | Neighbours (`MAX_NEIGHBOURS`) | 8 | 50 |
 | GPS | yes: `gps` commands, position, clock | no |
 | Clock chip | PCF8563, read at boot, written when the clock is set | none: the clock starts at 2026-11-05 until `time` or `clock sync` |

@@ -8,7 +8,7 @@ use mc_node::region::RegionMap;
 use mc_server::persist::{
     CLIENT_RECORD, SETTINGS_RECORD, ServerStore, decode_client, decode_settings,
 };
-use mc_server::repeater::ServerPrefs;
+use mc_server::server::ServerPrefs;
 use mc_spiffs::{Spiffs, repeater};
 
 const IMAGE: &[u8] = include_bytes!("../../../testdata/spiffs/cpp-repeater.bin");
@@ -63,7 +63,7 @@ fn a_repeater_is_told_from_a_companion() {
 fn imports_everything() {
     let mut fs = Spiffs::new(IMAGE, IMAGE.len() as u32).unwrap();
     let mut st = Mem::default();
-    let s = repeater::import(&mut fs, &mut st).unwrap();
+    let s = repeater::import(&mut fs, mc_server::Role::Repeater, &mut st).unwrap();
     assert_eq!(s.key, hex(NODE));
     assert_eq!(&s.name[..12], b"C++ Repeater");
     assert_eq!((s.clients, s.regions), (2, 2));
@@ -131,7 +131,7 @@ fn the_summary_reads_the_same() {
 fn from_a_companion_only_identity_and_node_settings() {
     let mut fs = Spiffs::new(COMPANION, COMPANION.len() as u32).unwrap();
     let mut st = Mem::default();
-    let s = repeater::import(&mut fs, &mut st).unwrap();
+    let s = repeater::import(&mut fs, mc_server::Role::Repeater, &mut st).unwrap();
     assert_eq!((s.clients, s.regions), (0, 0));
     assert!(st.identity.is_some());
     let mut sp = ServerPrefs::default();

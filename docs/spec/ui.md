@@ -163,9 +163,9 @@ The Heltec V4 (`docs/spec/heltec-v4.md`): a 128×64 OLED and one button, too sma
 - `mc ui --board heltec-v4` runs the pages in a terminal; tests snapshot every page as text and two of them as pixels (`crates/mc-ui/tests/status.rs`).
 
 
-## 13. Repeater pages
+## 13. Server pages
 
-A repeater (`rpt-heltec-v4`, `rpt-m5`; `docs/spec/server.md`) shows the same kind of pages as the companion's status pages (§12), with its own content (`mc_ui::server`). The C++ repeater shows a single screen; these pages are oxymesh's own and nothing else depends on them.
+A repeater or a room server (`rpt-*`, `room-*`; `docs/spec/server.md`) shows the same kind of pages as the companion's status pages (§12), with its own content (`mc_ui::server`). The C++ repeater shows a single screen; these pages are oxymesh's own and nothing else depends on them.
 
 - **Buttons:** on the Heltec, click = next page, double click = previous, long press = act. On the M5, the lower button does the same and the top one shows the previous page. After power-off, the top button wakes the M5 and the only button wakes the Heltec.
 - **Layout:** the header and 5 lines of §12 (21 columns). The Heltec draws them in the 6×10 font. The M5 uses 9×15 (bold header, a rule, one line every 30 px) and redraws at most every 30 s unless a button is pressed, with the e-paper refresh policy of §10.
@@ -173,10 +173,11 @@ A repeater (`rpt-heltec-v4`, `rpt-m5`; `docs/spec/server.md`) shows the same kin
 
   | Page | Shows | Long press |
   |---|---|---|
-  | Home | `Repeater` and the time; forwarding on or off; uptime; clients logged in with a role (`Logins`) and neighbours (`Nbrs`) | — |
+  | Home | `Repeater` (or `Room server`) and the time; forwarding on or off (a room server: posts stored and pushed); uptime; clients logged in with a role (`Logins`) and, for a repeater, neighbours (`Nbrs`) | — |
   | Radio | frequency, bandwidth / SF / coding rate, TX setting, noise floor, airtime (TX and RX, seconds) | — |
   | Traffic | packets heard, sent and duplicates, flood and direct; the last RSSI | — |
-  | Neighbours | how many, then the newest: key prefix, SNR, how long ago | — |
+  | Neighbours (repeater) | how many, then the newest: key prefix, SNR, how long ago | — |
+  | Posts (room server) | how many, then the newest: author's key prefix and text | — |
   | Advert | — | sends a flood advert (default scope) |
   | Off | — | powers off (deep sleep) |
 

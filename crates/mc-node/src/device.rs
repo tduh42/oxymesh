@@ -925,7 +925,10 @@ impl Device {
                 path,
             } => self.on_request(now, key, *ts, data, *flood, *path_len, path, rng),
             // A companion serves no anonymous requests (C++: no `onAnonDataRecv`).
-            Event::AnonRequest { .. } | Event::ServerPeer { .. } | Event::ServerPath { .. } => {}
+            Event::AnonRequest { .. }
+            | Event::ServerPeer { .. }
+            | Event::ServerPath { .. }
+            | Event::ServerAck { .. } => {}
             Event::RawData { snr4, rssi, data } => self.push(&Response::RawData {
                 snr4: *snr4,
                 rssi: *rssi,

@@ -370,6 +370,11 @@ pub enum Event {
     ServerPath {
         key: [u8; PUB_KEY_LEN],
     },
+    /// Server mode: an ACK it waited for (`Node::server_acks`) arrived, alone, in a multipart
+    /// or with a PATH.
+    ServerAck {
+        crc: u32,
+    },
     RawData {
         snr4: i8,
         rssi: i8,
@@ -443,6 +448,9 @@ pub struct Node {
     pub routing: Option<Routing>,
     /// Advert type (`ADV_TYPE_*`): chat for a companion, repeater or room for a server.
     pub advert_kind: u8,
+    /// ACKs a server waits for (a room server's pushed posts). One heard is taken off, not
+    /// relayed, and reported as `Event::ServerAck` (`onAckRecv`, `markDoNotRetransmit`).
+    pub server_acks: heapless::Vec<u32, 32>,
     /// Region of the last packet received (`recv_pkt_region`): `Some(0)` the wildcard.
     pub last_rx_region: Option<u16>,
     pub channels: Channels,
@@ -494,6 +502,7 @@ impl Node {
             routing: None,
             last_rx_region: None,
             advert_kind: mc_air::advert::TYPE_CHAT,
+            server_acks: heapless::Vec::new(),
             channels: Channels::new(),
             acks: [None; ACK_TABLE],
             next_ack: 0,
@@ -531,6 +540,7 @@ impl Node {
         self.pending_discovery = 0;
         self.gps_pos = None;
         self.gps_alt_mm = 0;
+        self.server_acks.clear();
     }
 
     /// Our position for adverts and the app: the GPS's, else the stored one.

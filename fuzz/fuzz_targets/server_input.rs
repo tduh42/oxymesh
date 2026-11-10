@@ -15,7 +15,7 @@ use mc_air::{LocalIdentity, PayloadType};
 use mc_core::{Duration, Instant};
 use mc_node::cli::Reply;
 use mc_node::{Event, Node, Prefs};
-use mc_server::Repeater;
+use mc_server::Server;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::SeedableRng;
 
@@ -33,7 +33,12 @@ fuzz_target!(|data: &[u8]| {
     let mut now = Instant::from_nanos(1_000_000_000);
     let mut node = Node::new(id, prefs, 1_793_900_000, now);
     let mut rng = ChaCha20Rng::seed_from_u64(1);
-    let mut r = Repeater::new(now, "v1.18.0-oxymesh");
+    let role = if data.first().is_some_and(|b| b & 0x40 != 0) {
+        mc_server::Role::Room
+    } else {
+        mc_server::Role::Repeater
+    };
+    let mut r = Server::new(now, "v1.18.0-oxymesh", role);
     r.start(&mut node, now);
     let clients = [
         *LocalIdentity::from_seed(&[9; 32]).pub_key(),
@@ -90,7 +95,7 @@ fuzz_target!(|data: &[u8]| {
             },
         };
         r.on_event(&mut node, &ev, now, &mut rng);
-        r.tick(&mut node, now);
+        r.tick(&mut node, now, &mut rng);
         assert!(r.acl.len() <= 32);
     }
     // The console, line by line, from the serial port and over the air.
@@ -113,7 +118,7 @@ fuzz_target!(|data: &[u8]| {
                 &mut rng,
             );
             assert!(out.len() <= mc_node::cli::REPLY_MAX);
-            r.tick(&mut node, now);
+            r.tick(&mut node, now, &mut rng);
             assert!(r.acl.len() <= 32);
         }
         while r.poll_action().is_some() {}

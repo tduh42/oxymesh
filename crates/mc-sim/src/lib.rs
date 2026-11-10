@@ -97,7 +97,7 @@ pub struct SimNode {
     /// Frames sent to the app outside direct responses (notifications, contacts).
     pub app: Vec<Frame>,
     /// The repeater role (`mc-server`), driven by the node's events.
-    pub server: Option<mc_server::Repeater>,
+    pub server: Option<mc_server::Server>,
 }
 
 impl SimNode {
@@ -296,23 +296,33 @@ impl World {
                 sn.app.push(f);
             }
             if let Some(srv) = sn.server.as_mut() {
-                srv.tick(&mut sn.dev.node, now);
+                srv.tick(&mut sn.dev.node, now, &mut sn.rng);
             }
         }
     }
 
-    /// Node `i` becomes a MeshCore repeater (`mc_server::Repeater`): it forwards, and serves
+    /// Node `i` becomes a MeshCore repeater (`mc_server::Server`): it forwards, and serves
     /// logins (`admin` or `guest` password), requests, the console, discovery and adverts.
     /// Its board reports 4.05 V and a noise floor of −112 dBm.
     pub fn serve_repeater(&mut self, i: usize, admin: &str, guest: &str) {
+        self.serve(i, mc_server::Role::Repeater, admin, guest);
+    }
+
+    /// Node `i` becomes a MeshCore room server (`mc_server::Server`, `Role::Room`): logins
+    /// with the admin or the room password, posts pushed to every other client.
+    pub fn serve_room(&mut self, i: usize, admin: &str, room: &str) {
+        self.serve(i, mc_server::Role::Room, admin, room);
+    }
+
+    fn serve(&mut self, i: usize, role: mc_server::Role, admin: &str, guest: &str) {
         let now = self.now;
         let sn = &mut self.nodes[i];
-        let mut r = mc_server::Repeater::new(now, "v1.18.0-oxymesh");
+        let mut r = mc_server::Server::new(now, "v1.18.0-oxymesh", role);
         r.prefs.admin_password.clear();
         let _ = r.prefs.admin_password.push_str(admin);
         r.prefs.guest_password.clear();
         let _ = r.prefs.guest_password.push_str(guest);
-        r.board = mc_server::repeater::Board {
+        r.board = mc_server::server::Board {
             battery_mv: 4_050,
             mcu_temp_deci: Some(231),
             noise_floor: -112,

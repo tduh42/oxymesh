@@ -1,0 +1,15 @@
+---
+source: crates/mc-ui/tests/server.rs
+expression: "format!(\"{home}\\n\\n{posts}\")"
+---
+Hut           1/6 USB
+Room server 17:33
+Posts 2  pushed 0
+Up 0 min
+Logins 0
+
+
+Hut           4/6 USB
+Posts 2
+A3EA Hut closed Monda
+A3EA Snow on the pass

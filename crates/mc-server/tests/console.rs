@@ -5,8 +5,8 @@ use mc_air::LocalIdentity;
 use mc_core::{Duration, Instant};
 use mc_node::cli::Reply;
 use mc_node::{Node, Prefs};
-use mc_server::Repeater;
-use mc_server::repeater::{Action, Board, Gps};
+use mc_server::Server;
+use mc_server::server::{Action, Board, Gps};
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::SeedableRng;
 
@@ -14,7 +14,7 @@ const EPOCH: u32 = 1_793_900_000;
 
 struct Rig {
     node: Node,
-    r: Repeater,
+    r: Server,
     now: Instant,
     rng: ChaCha20Rng,
     serial: String,
@@ -28,7 +28,7 @@ impl Rig {
         prefs.name[..6].copy_from_slice(b"Morgan");
         let now = Instant::from_nanos(1_000_000_000);
         let mut node = Node::new(id, prefs, EPOCH, now);
-        let mut r = Repeater::new(now, "v1.18.0-oxymesh");
+        let mut r = Server::new(now, "v1.18.0-oxymesh", mc_server::Role::Repeater);
         r.board = Board {
             battery_mv: 4_012,
             manufacturer: "Elecrow ThinkNode M5",
@@ -76,7 +76,7 @@ impl Rig {
 
     fn wait(&mut self, ms: u64) {
         self.now = self.now + Duration::from_millis(ms);
-        self.r.tick(&mut self.node, self.now);
+        self.r.tick(&mut self.node, self.now, &mut self.rng);
     }
 }
 

@@ -457,11 +457,16 @@ fn remote(path: &str, to: &str, password: &str, lines: &[String]) -> Result<(), 
         Response::LoginFail { .. } => Some(Err(())),
         _ => None,
     });
+    // Firmware level 1: a v1.18 room server (52-byte status); 2: a repeater (56 bytes).
+    let mut room = false;
     match login {
-        Ok(Ok((admin, Some(s)))) => println!(
-            "logged in: admin {admin}, permissions {}, firmware level {}",
-            s.acl, s.fw_level
-        ),
+        Ok(Ok((admin, Some(s)))) => {
+            room = s.fw_level == 1;
+            println!(
+                "logged in: admin {admin}, permissions {}, firmware level {}",
+                s.acl, s.fw_level
+            );
+        }
         Ok(Ok((admin, None))) => println!("logged in: admin {admin}"),
         Ok(Err(())) => return Err("login refused".into()),
         Err(_) => return Err("no answer to the login within 30 s".into()),
@@ -473,7 +478,7 @@ fn remote(path: &str, to: &str, password: &str, lines: &[String]) -> Result<(), 
                 Response::StatusResponse { data, .. } => Some(data.to_vec()),
                 _ => None,
             })?;
-            print_status(&data);
+            print_status(&data, room);
             continue;
         }
         p.ask(&Command::SendTxtMsg {
@@ -504,10 +509,12 @@ fn remote(path: &str, to: &str, password: &str, lines: &[String]) -> Result<(), 
     Ok(())
 }
 
-/// `RepeaterStats` (56 bytes, `docs/spec/server.md` §2.4).
-fn print_status(d: &[u8]) {
-    if d.len() < 56 {
-        println!("status: {} bytes, expected 56", d.len());
+/// `RepeaterStats` (56 bytes, `docs/spec/server.md` §2.4) or the room's `ServerStats` (52
+/// bytes, §3): the same first 48 bytes.
+fn print_status(d: &[u8], room: bool) {
+    let want = if room { 52 } else { 56 };
+    if d.len() < want {
+        println!("status: {} bytes, expected {want}", d.len());
         return;
     }
     let u16_at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]);
@@ -531,14 +538,25 @@ fn print_status(d: &[u8]) {
         u16_at(46),
         u16_at(44)
     );
-    println!(
-        "airtime TX {} s, RX {} s, uptime {} s, errors {:#x}, receive errors {}",
-        u32_at(16),
-        u32_at(48),
-        u32_at(20),
-        u16_at(40),
-        u32_at(52)
-    );
+    if room {
+        println!(
+            "airtime TX {} s, uptime {} s, errors {:#x}, posts {}, pushes {}",
+            u32_at(16),
+            u32_at(20),
+            u16_at(40),
+            u16_at(48),
+            u16_at(50)
+        );
+    } else {
+        println!(
+            "airtime TX {} s, RX {} s, uptime {} s, errors {:#x}, receive errors {}",
+            u32_at(16),
+            u32_at(48),
+            u32_at(20),
+            u16_at(40),
+            u32_at(52)
+        );
+    }
 }
 
 /// Sends console lines (ended by `\r`, as a terminal does) and prints the echo and replies.

@@ -28,7 +28,7 @@ fn draw(w: &mc_sim::World, pages: &Pages) -> String {
     let sn = &w.nodes[1];
     let v = View {
         node: &sn.dev.node,
-        repeater: sn.server.as_ref().unwrap(),
+        server: sn.server.as_ref().unwrap(),
         now: w.now,
         battery_percent: Some(87),
         charging: false,
@@ -76,4 +76,36 @@ fn long_press_acts_on_advert_and_off_only() {
     pages.gesture(Click(Button::A));
     pages.gesture(Click(Button::A));
     assert_eq!(pages.gesture(Long(Button::A)), Some(Act::PowerOff));
+}
+
+#[test]
+fn a_room_server_shows_its_posts() {
+    let mut w = mc_sim::World::new(9);
+    let me = w.add("Morgan", |_| {});
+    let room = w.add("Hut", |_| {});
+    w.link(me, room);
+    w.serve_room(room, "secret", "hello");
+    w.run(Duration::from_secs(20));
+    let now = w.now;
+    let author = *w.nodes[me].dev.node.id.pub_key();
+    let sn = &mut w.nodes[room];
+    let srv = sn.server.as_mut().unwrap();
+    srv.add_post(&mut sn.dev.node, &author, "Snow on the pass", now);
+    srv.add_post(&mut sn.dev.node, &author, "Hut closed Monday", now);
+    let mut pages = Pages::new();
+    let sn = &w.nodes[room];
+    let v = View {
+        node: &sn.dev.node,
+        server: sn.server.as_ref().unwrap(),
+        now: w.now,
+        battery_percent: None,
+        charging: true,
+        tz_offset_min: 0,
+    };
+    let home = pages.screen(&v).lines.join("\n");
+    for _ in 0..3 {
+        pages.gesture(Click(Button::A));
+    }
+    let posts = pages.screen(&v).lines.join("\n");
+    insta::assert_snapshot!("room_pages", format!("{home}\n\n{posts}"));
 }

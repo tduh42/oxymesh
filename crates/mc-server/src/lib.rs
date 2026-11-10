@@ -1,9 +1,10 @@
 //! MeshCore's server roles on top of `mc-node` (`docs/spec/server.md`, ADR-0010): the repeater
-//! (`examples/simple_repeater`) and, later, the room server, ported from MeshCore v1.18 (MIT).
+//! (`examples/simple_repeater`) and the room server (`examples/simple_room_server`), ported from
+//! MeshCore v1.18 (MIT).
 //!
 //! A server owns a [`mc_node::Node`] in server mode (`Node::routing` set): the node forwards by
 //! the server's rules and hands over what is addressed to it ([`mc_node::Event::AnonRequest`],
-//! `ServerPeer`, `ServerPath`, `AdvertHeard`, `ControlData`); the server answers. Clients that
+//! `ServerPeer`, `ServerPath`, `ServerAck`, `AdvertHeard`, `ControlData`); the server answers. Clients that
 //! logged in live in the node's contact table, so that their requests decrypt and their paths
 //! are kept; the access list holds their permissions.
 #![no_std]
@@ -23,10 +24,11 @@ pub mod console;
 pub mod limiter;
 pub mod neighbours;
 pub mod persist;
-pub mod repeater;
 pub mod reply;
+pub mod room;
+pub mod server;
 
-pub use repeater::Repeater;
+pub use server::{Role, Server};
 
 /// `SERVER_RESPONSE_DELAY`, ms.
 pub const RESPONSE_DELAY_MS: u64 = 300;

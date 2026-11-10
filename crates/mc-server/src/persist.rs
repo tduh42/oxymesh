@@ -18,7 +18,7 @@ use mc_node::persist::{PREFS_RECORD, encode_prefs};
 use mc_node::region::{FILE_MAX, RegionMap};
 
 use crate::acl::Client;
-use crate::repeater::{Action, Repeater, ServerPrefs};
+use crate::server::{Action, Server, ServerPrefs};
 
 /// The repeater's settings record.
 pub const SETTINGS_RECORD: usize = 164;
@@ -158,7 +158,7 @@ pub fn decode_client(b: &[u8]) -> Option<(Client, u8, [u8; 64])> {
     Some((c, out_path_len, out_path))
 }
 
-impl Repeater {
+impl Server {
     /// Carries out a save action (`SaveAcl`, `SavePrefs`, `SaveRegions`, `SaveIdentity`);
     /// false for the others, which are the runner's.
     pub fn save(&self, node: &Node, action: Action, st: &mut impl ServerStore) -> bool {
@@ -170,12 +170,14 @@ impl Repeater {
                 st.save_settings(&encode_settings(&self.prefs, routing));
             }
             Action::SaveAcl => {
-                // Clients with permissions only, as `ClientACL::save` skips the others.
+                // Clients with permissions only, as `ClientACL::save` skips the others; the
+                // room server keeps its admins only (`saveFilter`).
+                let room = self.role == crate::server::Role::Room;
                 let mut it = self
                     .acl
                     .clients
                     .iter()
-                    .filter(|c| c.permissions != 0)
+                    .filter(|c| c.permissions != 0 && (!room || c.is_admin()))
                     .map(|c| {
                         let contact = node
                             .contacts
@@ -204,7 +206,7 @@ impl Repeater {
         true
     }
 
-    /// What was stored, before [`Repeater::start`]: the settings, the clients (with their
+    /// What was stored, before [`Server::start`]: the settings, the clients (with their
     /// paths, as node contacts) and the regions. Missing or unreadable parts keep the
     /// defaults.
     pub fn restore<'a>(
@@ -228,7 +230,7 @@ impl Repeater {
             if self.acl.clients.push(c).is_err() {
                 break;
             }
-            crate::repeater::ensure_contact(node, &c.key);
+            crate::server::ensure_contact(node, &c.key);
             if let Some(ct) = node
                 .contacts
                 .find(&c.key)

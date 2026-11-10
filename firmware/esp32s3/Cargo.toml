@@ -32,6 +32,14 @@ name = "rpt-heltec-v4"
 path = "./src/bin/rpt-heltec-v4.rs"
 
 [[bin]]
+name = "room-m5"
+path = "./src/bin/room-m5.rs"
+
+[[bin]]
+name = "room-heltec-v4"
+path = "./src/bin/room-heltec-v4.rs"
+
+[[bin]]
 name = "gps-probe"
 path = "./src/bin/gps-probe.rs"
 
