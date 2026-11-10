@@ -22,6 +22,7 @@
 
 pub mod cpp;
 mod json;
+pub mod repeater;
 
 /// Reads the flash the file system lives in, from its start.
 pub trait Flash {

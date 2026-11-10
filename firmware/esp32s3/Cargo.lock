@@ -1954,6 +1954,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-server"
+version = "0.0.0"
+dependencies = [
+ "heapless 0.9.3",
+ "mc-air",
+ "mc-core",
+ "mc-node",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "mc-spiffs"
 version = "0.0.0"
 dependencies = [
@@ -1961,6 +1972,7 @@ dependencies = [
  "mc-air",
  "mc-core",
  "mc-node",
+ "mc-server",
 ]
 
 [[package]]

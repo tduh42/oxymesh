@@ -12,6 +12,7 @@ repository.workspace = true
 mc-core.workspace = true
 mc-air.workspace = true
 mc-node.workspace = true
+mc-server.workspace = true
 heapless.workspace = true
 
 [dev-dependencies]

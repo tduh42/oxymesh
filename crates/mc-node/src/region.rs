@@ -21,6 +21,8 @@ pub const NAME_LEN: usize = 31;
 pub const FILE_HEADER: usize = 10;
 /// `/regions2` entry: id, parent, name[31], flags, 128 reserved.
 pub const FILE_ENTRY: usize = 2 + 2 + NAME_LEN + 1 + 128;
+/// A whole `/regions2` file with every slot used.
+pub const FILE_MAX: usize = FILE_HEADER + MAX * FILE_ENTRY;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Region {
@@ -339,6 +341,17 @@ impl RegionMap {
             w.put_u8(r.flags)
         })();
         b
+    }
+
+    /// The whole `/regions2` file (`RegionMap::save`) into `out`: its length, or `None` if
+    /// `out` is too small.
+    pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
+        let mut w = mc_core::Writer::new(out);
+        w.put(&self.encode_header()).ok()?;
+        for r in &self.regions {
+            w.put(&Self::encode_entry(r)).ok()?;
+        }
+        Some(w.written().len())
     }
 
     /// Reads a `/regions2` file (`RegionMap::load`): `None` if the header is short; entries

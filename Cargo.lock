@@ -1239,6 +1239,7 @@ dependencies = [
  "mc-air",
  "mc-core",
  "mc-node",
+ "mc-server",
  "mc-sim",
 ]
 

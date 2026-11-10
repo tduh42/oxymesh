@@ -474,8 +474,15 @@ fn spiffs(path: &std::path::Path) -> Result<(), String> {
                 ),
                 None => println!("radio     (no readable /prefs.json: defaults)"),
             }
-            println!("contacts  {}", s.contacts);
-            println!("channels  {}", s.channels);
+            if mc_spiffs::repeater::is_server(&mut fs).map_err(|e| format!("{e:?}"))? {
+                let r = mc_spiffs::repeater::summary(&mut fs).map_err(|e| format!("{e:?}"))?;
+                println!("role      repeater (or room server)");
+                println!("clients   {}", r.clients);
+                println!("regions   {}", r.regions);
+            } else {
+                println!("contacts  {}", s.contacts);
+                println!("channels  {}", s.channels);
+            }
             Ok(())
         }
         Err(e) => Err(format!("nothing to import: {e:?}")),

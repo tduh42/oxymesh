@@ -1,7 +1,11 @@
-"""A C++ firmware SPIFFS image for mc-spiffs's tests: made-up identity, settings, contacts,
-channels and one stored advert, plus a deleted older settings file that must be skipped.
+"""C++ firmware SPIFFS images for mc-spiffs's tests.
 
-    python3 -I testdata/spiffs/gen.py > /dev/null    # writes testdata/spiffs/cpp.bin
+- cpp.bin, a companion: made-up identity, settings, contacts, channels and one stored advert,
+  plus a deleted older settings file that must be skipped;
+- cpp-repeater.bin, a repeater: made-up identity, settings (`/prefs.json` with the server
+  sections), access list (`/s_contacts`) and regions (`/regions2`).
+
+    python3 -I testdata/spiffs/gen.py > /dev/null    # writes both
 
 A writer of our own, in pure Python with no dependencies, independent of the Rust reader: the
 SPIFFS layout from `spiffs_nucleus.h` (P. Andersson, MIT) with ESP-IDF's settings (256-byte
@@ -136,6 +140,52 @@ PREFS = (
 )
 
 
+REPEATER_PREFS = (
+    '{name:"C++ Repeater",pass:"adm\\"in",guest:"hello",owner:"Morgan\\nCol du Midi",'
+    "adv_int:0,f_adv_int:12,lat:45.900000,lon:6.800000,"
+    "radio:{freq:869.6180,bw:62.5000,sf:8,cr:8,cad:0,int_thr:0,rxgain:1,fem_rxgain:1,"
+    "fem_txgain:0,tx:22,af:1.0000,rxdelay:0,f_txdelay:0.5000,d_txdelay:0.3000,agc_int:0,"
+    "hash_mode:0,multi_ack:0},"
+    'bridge:{en:1,delay:500,src:0,baud:115200,ch:1,secret:"LVSITANOS"},'
+    "gps:{en:0,int:0,adv_loc:2},repeat:{disable:0,f_max:32,f_max_uns:16,f_max_adv:4,loop:2},"
+    "room:{rd_only:0},power:{adc_mult:0,pwr_sav_en:0},custom:{}}"
+)
+
+
+def client(label, perms, path):
+    """A `/s_contacts` record (ClientACL::save): key, permissions, sync_since, 2 unused,
+    out_path_len, out_path[64], shared secret (made up: the reader must not use it)."""
+    pub, _ = identity(label)
+    rec = pub + bytes([perms]) + struct.pack("<I", 0) + bytes(2)
+    rec += bytes([len(path) if path is not None else 0xFF]) + (path or b"").ljust(64, b"\0")
+    rec += hashlib.sha256(label.encode()).digest()
+    assert len(rec) == 136
+    return pub, rec
+
+
+def region(rid, parent, name, flags):
+    rec = struct.pack("<HH", rid, parent) + name.encode().ljust(31, b"\0") + bytes([flags])
+    return rec + bytes(128)
+
+
+def repeater():
+    pub, prv = identity("oxymesh spiffs test repeater")
+    img = Image()
+    img.file("/identity/_main.id", pub + prv)
+    img.file("/prefs.json", REPEATER_PREFS.encode())
+    admin, a = client("repeater admin", 3, None)
+    _, b = client("repeater reader", 1, bytes([0x11, 0x22]))
+    img.file("/s_contacts", a + b)
+    # Header: 3 reserved, default id 1, home id 2, wildcard flags 0, next id 3.
+    regions = bytes(3) + struct.pack("<HHBH", 1, 2, 0, 3)
+    regions += region(1, 0, "#eu", 0) + region(2, 1, "fr", 1)
+    img.file("/regions2", regions)
+    with open(os.path.join(HERE, "cpp-repeater.bin"), "wb") as f:
+        f.write(img.binary())
+    print(f"repeater {pub.hex()}")
+    print(f"admin {admin.hex()}")
+
+
 def main():
     pub, prv = identity("oxymesh spiffs test node")
     img = Image()
@@ -154,6 +204,7 @@ def main():
         f.write(img.binary())
     print(f"node {pub.hex()}")
     print(f"alice {recs[0][0].hex()}")
+    repeater()
 
 
 if __name__ == "__main__":

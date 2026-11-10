@@ -1,11 +1,12 @@
-//! The C++ firmware's SPIFFS (`mc-spiffs`): a flash image read and imported.
+//! The C++ firmware's SPIFFS (`mc-spiffs`): a flash image read and imported, as a companion's
+//! and as a repeater's.
 //!
 //! Oracle: never panic and never loop forever on any image; what is read stays within the
 //! files' sizes. The first 32 bytes of input choose the image size (in 4 KB blocks).
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use mc_spiffs::{Spiffs, cpp};
+use mc_spiffs::{Spiffs, cpp, repeater};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(mut fs) = Spiffs::new(data, data.len() as u32) else {
@@ -24,4 +25,9 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let _ = cpp::summary(&mut fs);
+    let _ = repeater::is_server(&mut fs);
+    let _ = repeater::summary(&mut fs);
+    let mut sp = mc_server::repeater::ServerPrefs::default();
+    let mut r = mc_node::node::Routing::REPEATER;
+    let _ = repeater::settings(&mut fs, &mut sp, &mut r);
 });

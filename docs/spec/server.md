@@ -232,3 +232,35 @@ Hex output is uppercase, as `Utils::toHex` writes it.
 - There are no bridges and no ADC multiplier.
 - After `region load`, the default scope used for adverts follows the new table at once. The C++ keeps the key it had computed until `region default` or a restart.
 - `stats-packets` "recv" and "sent" are the node's counters (§2.11).
+
+## 5. Storage and import
+
+### 5.1 What is kept (`mc_server::persist`)
+
+The runner stores four records under its own keys (`ServerStore`), on the actions `SavePrefs`, `SaveAcl` and `SaveRegions` (`Repeater::save`). At start it hands them back (`Repeater::restore`) before `Repeater::start`.
+
+| Record | Content |
+|---|---|
+| node settings | the companion's settings record (`mc_node::persist`): name, position, radio, delays, GPS |
+| repeater settings (164 bytes) | version 1; admin and guest passwords (16 each, NUL padded); owner info (120); `advert_interval`, `flood_advert_interval`; flags: bit 0 `allow_read_only`, bit 1 `powersaving`, bit 2 `disable_fwd`; `flood_max`, `flood_max_unscoped`, `flood_max_advert`, `loop_detect`; `discovery_mod_timestamp` (u32 LE) |
+| access list | per client: the C++ `/s_contacts` record without its last 32 bytes. That is the key (32), permissions, `sync_since` (u32 LE), 2 unused bytes, `out_path_len`, `out_path` (64). Only clients with permissions are kept, as `ClientACL::save` does. Their paths come back as the node contacts' paths |
+| regions | the C++ `/regions2` file as is (`mc_node::region`) |
+
+The C++ saves the shared secret with each client. oxymesh derives it again from its own key, as the C++ does on load, so it never stores it.
+
+### 5.2 Import from the C++ repeater (`mc_spiffs::repeater`)
+
+A SPIFFS holding `/s_contacts` or `/regions2` is a server's (`is_server`). The import reads everything before it writes anything:
+
+- `/identity/_main.id`, checked as for the companion (`companion.md` §8.1);
+- `/prefs.json`:
+  - the node's settings, as the companion's, starting from the repeater defaults (§2.9);
+  - the repeater's own keys: `pass`, `guest`, `owner`, `adv_int`, `f_adv_int`, `repeat.{disable, f_max, f_max_uns, f_max_adv, loop}`, `room.rd_only`, `power.pwr_sav_en`;
+  - `bridge`, `custom` and `power.adc_mult` are not used;
+  - the older binary `/com_prefs` is not read: v1.18 rewrites it as `/prefs.json` at its first boot;
+- `/s_contacts`: 136-byte records, at most 32. Each loses its shared secret;
+- `/regions2`, decoded then written again in the same format.
+
+`discovery_mod_timestamp` is not in the C++'s `/prefs.json`, so it restarts at 0. `mc spiffs <image>` shows what an import would bring. The test image is `testdata/spiffs/cpp-repeater.bin`, made up by `testdata/spiffs/gen.py`.
+
+To be written with milestone S2.
