@@ -61,6 +61,43 @@ pub struct Prefs {
     pub ui: UiPrefs,
 }
 
+/// Loop detection (`LOOP_DETECT_*`): how often this node's hash may already be in a flood's
+/// path, by hash size 1, 2, 3 (`examples/simple_repeater/MyMesh.cpp:396-398`).
+pub const LOOP_MAX: [[u8; 3]; 3] = [[4, 2, 1], [2, 1, 1], [1, 1, 1]];
+
+/// A server's forwarding rules (`MyMesh::allowPacketForward`, simple_repeater; MeshCore, MIT).
+#[derive(Debug, Clone)]
+pub struct Routing {
+    /// `disable_fwd`: forward nothing (room servers, `repeat off`).
+    pub disable_fwd: bool,
+    /// Hop limits: any flood, unscoped floods, adverts (`flood.max*`).
+    pub flood_max: u8,
+    pub flood_max_unscoped: u8,
+    pub flood_max_advert: u8,
+    /// 0 off, 1 minimal, 2 moderate, 3 strict (`loop.detect`).
+    pub loop_detect: u8,
+    pub regions: crate::region::RegionMap,
+}
+
+impl Routing {
+    /// The repeater's defaults (`MyMesh.cpp:906-911`).
+    pub const REPEATER: Self = Self {
+        disable_fwd: false,
+        flood_max: 64,
+        flood_max_unscoped: 64,
+        flood_max_advert: 8,
+        loop_detect: 1,
+        regions: crate::region::RegionMap::new(),
+    };
+
+    /// `isFloodHopLimitExceeded` (`src/helpers/RoutingPolicy.h`).
+    pub fn hop_limit_exceeded(&self, hops: u8, scoped: bool, advert: bool) -> bool {
+        hops >= self.flood_max
+            || (!scoped && hops >= self.flood_max_unscoped)
+            || (advert && hops >= self.flood_max_advert)
+    }
+}
+
 /// Settings of the on-device interface; the app never sees them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiPrefs {
@@ -376,6 +413,10 @@ pub struct Node {
     pub contacts: Contacts,
     /// Keep-alive connections to servers (`HAS_CONNECTION`).
     pub connections: crate::connections::Connections,
+    /// How a server forwards; `None` for a companion, which forwards when `prefs.repeat` says.
+    pub routing: Option<Routing>,
+    /// Region of the last packet received (`recv_pkt_region`): `Some(0)` the wildcard.
+    pub last_rx_region: Option<u16>,
     pub channels: Channels,
     pub(crate) acks: [Option<ExpectedAck>; ACK_TABLE],
     pub(crate) next_ack: usize,
@@ -422,6 +463,8 @@ impl Node {
             seen: Seen::new(),
             contacts: Contacts::new(),
             connections: crate::connections::Connections::new(),
+            routing: None,
+            last_rx_region: None,
             channels: Channels::new(),
             acks: [None; ACK_TABLE],
             next_ack: 0,

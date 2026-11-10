@@ -25,6 +25,7 @@ pub mod heard;
 pub mod history;
 pub mod node;
 pub mod persist;
+pub mod region;
 pub mod requests;
 pub mod rx;
 pub mod tables;

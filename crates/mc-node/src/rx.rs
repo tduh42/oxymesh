@@ -63,8 +63,86 @@ impl Node {
         true
     }
 
-    fn allow_forward(&self) -> bool {
-        self.prefs.repeat
+    /// `allowPacketForward`: a companion forwards when `repeat` is on (`MyMesh.cpp:487-489`); a
+    /// server by its rules (`examples/simple_repeater/MyMesh.cpp:434-459`). `region`: the
+    /// packet's region (`recv_pkt_region`).
+    fn allow_forward(&self, pkt: &PacketBuf, region: Option<u16>) -> bool {
+        let Some(r) = &self.routing else {
+            return self.prefs.repeat;
+        };
+        if r.disable_fwd {
+            return false;
+        }
+        if !pkt.header.route.is_flood() {
+            return true;
+        }
+        let hops = pkt.path_len.hops();
+        let scoped = pkt.header.route == mc_air::Route::TransportFlood;
+        if r.hop_limit_exceeded(hops, scoped, pkt.header.ptype == PayloadType::ADVERT) {
+            return false;
+        }
+        if region.is_none() {
+            return false;
+        }
+        if r.loop_detect != 0 {
+            let size = usize::from(pkt.path_len.hash_size());
+            let max = crate::node::LOOP_MAX
+                .get(usize::from(r.loop_detect.min(3)) - 1)
+                .and_then(|m| m.get(size.saturating_sub(1)))
+                .copied()
+                .unwrap_or(1);
+            let mine = pkt
+                .path()
+                .chunks(size.max(1))
+                .take(usize::from(hops))
+                .filter(|h| self.self_hash_matches(h))
+                .count();
+            if mine >= usize::from(max) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `recv_pkt_region` (`examples/simple_repeater/MyMesh.cpp:556-569`): a scoped flood's
+    /// matching region, the wildcard for a plain flood it allows, nothing otherwise.
+    fn region_of(&self, pkt: &PacketBuf) -> Option<u16> {
+        let r = self.routing.as_ref()?;
+        match pkt.header.route {
+            mc_air::Route::TransportFlood => {
+                let code = pkt.transport.map_or(0, |t| t[0]);
+                r.regions.find_match(
+                    code,
+                    pkt.header.ptype.value(),
+                    pkt.payload(),
+                    crate::region::DENY_FLOOD,
+                )
+            }
+            mc_air::Route::Flood => {
+                (r.regions.wildcard_flags & crate::region::DENY_FLOOD == 0).then_some(0)
+            }
+            _ => None,
+        }
+    }
+
+    /// `routeDirectRecvAcks` (`Mesh.cpp:379-402`): an ACK relayed direct goes on as
+    /// `multi_acks` MULTIPART copies 300 ms apart, then itself.
+    fn route_direct_acks(&mut self, now: Instant, ack: &[u8], pkt: &PacketBuf, mut delay: u64) {
+        let (pl, path) = (pkt.path_len, pkt.path());
+        let path: heapless::Vec<u8, 64> = heapless::Vec::from_slice(path).unwrap_or_default();
+        let out = |p: Result<PacketBuf, mc_air::Error>, delay: u64, node: &mut Node| {
+            if let Ok(mut p) = p {
+                p.header.route = mc_air::Route::Direct;
+                if p.set_path(pl, &path).is_ok() {
+                    node.disp.queue(p, 0, now + Duration::from_millis(delay));
+                }
+            }
+        };
+        for extra in (1..=self.prefs.multi_acks).rev() {
+            out(mc_air::payload::multi_ack(ack, extra), delay, self);
+            delay += 300;
+        }
+        out(mc_air::payload::ack(ack), delay, self);
     }
 
     fn self_hash_matches(&self, h: &[u8]) -> bool {
@@ -81,10 +159,12 @@ impl Node {
     ) {
         let direct = pkt.header.route.is_direct();
         let ptype = pkt.header.ptype;
+        let region = self.region_of(pkt);
+        self.last_rx_region = region;
 
         // Direct TRACE (`Mesh.cpp:42-68`).
         if direct && ptype == PayloadType::TRACE {
-            self.on_trace(now, pkt, snr4, rng);
+            self.on_trace(now, pkt, snr4, region, rng);
             return;
         }
         // Zero-hop CONTROL only (`Mesh.cpp:70-76`).
@@ -106,6 +186,7 @@ impl Node {
         }
         // Direct with a path: forward only (`Mesh.cpp:78-110`).
         if direct && pkt.path_len.hops() > 0 {
+            let mut ours = false;
             if ptype == PayloadType::ACK
                 && let Some(crc) = pkt
                     .payload()
@@ -113,15 +194,47 @@ impl Node {
                     .and_then(|b| b.try_into().ok())
                     .map(u32::from_le_bytes)
             {
-                let _ = self.process_ack(now, crc);
+                // An ACK for us is not relayed (`markDoNotRetransmit` in `onAckRecv`).
+                ours = self.process_ack(now, crc).is_some();
             }
             let size = usize::from(pkt.path_len.hash_size());
             if self.self_hash_matches(pkt.path().get(..size).unwrap_or(&[0xFF; 4]))
-                && self.allow_forward()
+                && self.allow_forward(pkt, region)
             {
                 let d = self.retransmit_delay(pkt, self.prefs.direct_tx_delay_milli, rng);
-                let fresh = self.seen.check_and_mark(&pkt.hash(), true);
-                if fresh && pkt.pop_front_hop().is_ok() {
+                if ptype == PayloadType::MULTIPART {
+                    // `forwardMultipartDirect`: only a multipart ACK, sent on as ACKs.
+                    let pl = pkt.payload();
+                    if let (Some(&head), Some(body)) = (pl.first(), pl.get(1..))
+                        && head & 0x0F == PayloadType::ACK.value()
+                        && body.len() >= 4
+                        && let Ok(mut tmp) = mc_air::payload::ack(body)
+                    {
+                        tmp.header.route = mc_air::Route::Direct;
+                        let path: heapless::Vec<u8, 64> =
+                            heapless::Vec::from_slice(pkt.path()).unwrap_or_default();
+                        let remaining = u64::from(head >> 4);
+                        if tmp.set_path(pkt.path_len, &path).is_ok()
+                            && self.seen.check_and_mark(&tmp.hash(), true)
+                            && tmp.pop_front_hop().is_ok()
+                        {
+                            let ack: heapless::Vec<u8, 184> =
+                                heapless::Vec::from_slice(body).unwrap_or_default();
+                            self.route_direct_acks(now, &ack, &tmp, d + (remaining + 1) * 300);
+                        }
+                    }
+                } else if ptype == PayloadType::ACK {
+                    // Marked seen and our hop removed even when the ACK was ours.
+                    if self.seen.check_and_mark(&pkt.hash(), true)
+                        && pkt.pop_front_hop().is_ok()
+                        && !ours
+                    {
+                        let ack: heapless::Vec<u8, 184> =
+                            heapless::Vec::from_slice(pkt.payload()).unwrap_or_default();
+                        self.route_direct_acks(now, &ack, pkt, d);
+                    }
+                } else if self.seen.check_and_mark(&pkt.hash(), true) && pkt.pop_front_hop().is_ok()
+                {
                     self.disp
                         .queue(pkt.clone(), 0, now + Duration::from_millis(d));
                 }
@@ -168,9 +281,9 @@ impl Node {
                     return;
                 }
                 // A companion does not serve anonymous requests: the companion layer ignores
-                // the event, like the C++ (no `onAnonDataRecv` on the companion side).
+                // the event, like the C++ (no `onAnonDataRecv` on the companion side). Not
+                // forwarded only when it was for us and its MAC checked out (`Mesh.cpp:216-219`).
                 if dest == self.id.hash() {
-                    do_not_retransmit = true;
                     let key = *sender;
                     if let Some(secret) = self.id.shared_secret(&key) {
                         let mut buf = [0u8; 184];
@@ -180,6 +293,7 @@ impl Node {
                                 plain.get(4..),
                             )
                         {
+                            do_not_retransmit = true;
                             let ts = u32::from_le_bytes(ts);
                             self.emit(Event::AnonRequest {
                                 key,
@@ -254,7 +368,7 @@ impl Node {
             Payload::Trace { .. } | Payload::Control { .. } | Payload::Unknown(_) => return,
         }
         // Flood forwarding (`routeRecvPacket`).
-        if !do_not_retransmit && pkt.header.route.is_flood() && self.allow_forward() {
+        if !do_not_retransmit && pkt.header.route.is_flood() && self.allow_forward(pkt, region) {
             let h = self.id.pub_key();
             let hs = usize::from(pkt.path_len.hash_size());
             let mut hop = [0u8; 3];
@@ -270,7 +384,14 @@ impl Node {
         }
     }
 
-    fn on_trace(&mut self, now: Instant, pkt: &mut PacketBuf, snr4: i8, rng: &mut impl Rng) {
+    fn on_trace(
+        &mut self,
+        now: Instant,
+        pkt: &mut PacketBuf,
+        snr4: i8,
+        region: Option<u16>,
+        rng: &mut impl Rng,
+    ) {
         let raw_len = pkt.path_len.byte();
         if usize::from(raw_len) >= mc_air::packet::PATH_MAX {
             return;
@@ -305,7 +426,7 @@ impl Node {
             .get(offset..offset + (1usize << sz))
             .unwrap_or(&[0xFF; 9]);
         if self.self_hash_matches(entry)
-            && self.allow_forward()
+            && self.allow_forward(pkt, region)
             && self.seen.check_and_mark(&pkt.hash(), true)
         {
             let snr = snr4.to_le_bytes();

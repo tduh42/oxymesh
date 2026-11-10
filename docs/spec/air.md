@@ -197,6 +197,13 @@ Ring of 160 8-byte hashes, checked **before** decryption. Our own transmissions 
 
 Per-region scope (repeaters, rpt:556-569): TRANSPORT_FLOOD must match a region without `DENY_FLOOD`; plain FLOOD only if the `*` region allows it; direct is never filtered. None of this affects local delivery.
 
+How oxymesh does it (`mc_node::node::Routing`, `mc_node::region`; `crates/mc-sim/tests/repeater.rs`):
+- A server's rules, in the C++ order: `disable_fwd`; for floods, the hop limits (hops before appending); a region (`recv_pkt_region`: a TRANSPORT_FLOOD's first transport code against each region allowing flood, code 0 meaning the wildcard; a plain FLOOD the wildcard if it allows flood); loop detection, counting this node's hash in the path against minimal {4, 2, 1}, moderate {2, 1, 1} or strict {1, 1, 1} by hash size 1, 2, 3 (rpt:396-411; default minimal).
+- Region keys: `SHA256("#" ‖ name)[0..16]` for `#name` and plain names; `$name` (private) regions have no key and never match (`RegionMap.cpp:173-188`). New regions deny flood.
+- A direct ACK this node relays is not repeated as is: it goes on as `multi_acks` MULTIPART copies 300 ms apart, then the ACK (`routeDirectRecvAcks`, `src/Mesh.cpp:379-402`); an ACK for this node itself is not relayed. A direct MULTIPART is relayed only if it wraps an ACK, the same way, `(remaining + 1) × 300` ms later (`forwardMultipartDirect`, `:359-377`).
+- An ANON_REQ for this node is kept from forwarding only once its MAC checks out (`:216-219`).
+- Not ported: the optional receive delay by packet score (`rx_delay_base`, off by default on both roles; it needs a floating-point power).
+
 ### 4.7 Path learning
 
 1. A REQ, TXT or ANON_REQ reaches B by flood. B floods (within scope) a PATH containing the arrival path, with the ACK or the response as extra (`BCM:250-254, 316-320`).
