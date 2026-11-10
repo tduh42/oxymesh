@@ -2,6 +2,23 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-10 — the repeater and the room server on the M5 (S1d, S2)
+
+- Setup: the ThinkNode M5 flashed with `rpt-m5`, then `room-m5`, over its oxymesh companion store, then given its companion firmware back. `mc term` on the CH340 port.
+- Images: `rpt-m5` 534,496 B (29 % of the app partition).
+- **Repeater:**
+  - the identity (2E97BC45) and node settings came from the companion's store;
+  - the time came from the PCF8563;
+  - the console answered `ver`, `get role`, `clock`, `get radio`, `neighbors`, `stats-*` as specified;
+  - the boot advert went out zero hop after 16 s (`direct_tx` 1);
+  - noise floor −115 dBm, battery 4,076 mV.
+- **Room server:**
+  - `get role` answered `> room_server` and `get guest.password` `> hello`;
+  - `room.post` stored a post, and `set repeat on` was refused.
+  - The first build said `get repeat` > on: the store's restore had given a fresh room server the repeater's routing (fixed in 7f44b3b, then checked: > off).
+- **Not done yet:** login, status and the console over the air from the C++ Heltec (it did not answer on USB that evening), and a look at the e-paper pages.
+- After the companion firmware went back, `mc info` showed the same key, name and radio. The servers had written nothing to the store.
+
 ## 2026-11-10 — the Heltec V4 on oxymesh (B2)
 
 - Setup: Heltec V4.3 (KCT8103L front end) that ran MeshCore C++ v1.18; its whole flash read twice into a temp folder outside the repository (identical, it holds the private key) to put the C++ back afterwards; partition table read from it (the C++ 16 MB layout, as `partitions-heltec-v4.csv` assumed). `scripts/flash.sh heltec-v4`: image 947,552 bytes.
