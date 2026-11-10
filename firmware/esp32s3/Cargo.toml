@@ -24,6 +24,14 @@ name = "mc-heltec-v4"
 path = "./src/bin/mc-heltec-v4.rs"
 
 [[bin]]
+name = "rpt-m5"
+path = "./src/bin/rpt-m5.rs"
+
+[[bin]]
+name = "rpt-heltec-v4"
+path = "./src/bin/rpt-heltec-v4.rs"
+
+[[bin]]
 name = "gps-probe"
 path = "./src/bin/gps-probe.rs"
 
@@ -53,6 +61,7 @@ mc-nmea = { path = "../../crates/mc-nmea" }
 mc-spiffs = { path = "../../crates/mc-spiffs" }
 mc-air = { path = "../../crates/mc-air" }
 mc-node = { path = "../../crates/mc-node" }
+mc-server = { path = "../../crates/mc-server" }
 mc-proto = { path = "../../crates/mc-proto" }
 mc-ui = { path = "../../crates/mc-ui" }
 ratatui-core = { version = "0.1", default-features = false }

@@ -5,15 +5,22 @@
 //! (C++ `/contacts3` record), `0x0002_0000 + i` channel i, `0x0003_0000 + i` history slot i,
 //! `0x1000_0000 | seq` offline queue entry, `0x8000_0000 | key prefix` stored advert (preceded
 //! by the full key, checked on read). Deleted entries are empty values (tombstones).
+//!
+//! A server (`mc_server::persist`, `docs/spec/server.md` §5) adds: 5 its settings, 6 client
+//! count, `0x0004_0000 + i` client i, 7 the `/regions2` header and the entry count,
+//! `0x0005_0000 + i` region entry i (a whole file does not fit in one item). It shares 1 and 2.
 
 use embassy_futures::block_on;
 use embedded_storage_async::nor_flash::NorFlash;
-use mc_node::Device;
 use mc_node::history::HISTORY_RECORD;
 use mc_node::persist::{
     CHANNEL_RECORD, CONTACT_RECORD, PREFS_RECORD, PREFS_RECORD_V1, decode_channel, decode_contact,
     decode_prefs,
 };
+use mc_node::region::{FILE_ENTRY, FILE_HEADER, FILE_MAX, MAX as REGIONS_MAX};
+use mc_node::{Device, Node};
+use mc_server::Repeater;
+use mc_server::persist::{CLIENT_RECORD, SETTINGS_RECORD, ServerStore};
 use sequential_storage::cache::{Cache, Uncached};
 use sequential_storage::map::{MapConfig, MapStorage};
 use trouble_host::prelude::{
@@ -25,6 +32,11 @@ const KEY_IDENTITY: u32 = 1;
 const KEY_PREFS: u32 = 2;
 const KEY_COUNT: u32 = 3;
 const KEY_BONDS: u32 = 4;
+const KEY_SERVER: u32 = 5;
+const KEY_CLIENT_COUNT: u32 = 6;
+const KEY_REGIONS: u32 = 7;
+const CLIENT_BASE: u32 = 0x0004_0000;
+const REGION_BASE: u32 = 0x0005_0000;
 const CONTACT_BASE: u32 = 0x0001_0000;
 const CHANNEL_BASE: u32 = 0x0002_0000;
 const HISTORY_BASE: u32 = 0x0003_0000;
@@ -293,6 +305,52 @@ impl<S: NorFlash> FlashStore<S> {
     }
 
     /// Erases the whole partition (`FACTORY_RESET`).
+    /// A server's records back into `node` and `r` (before `Repeater::start`).
+    pub fn load_server(&mut self, node: &mut Node, r: &mut Repeater) {
+        let mut b = [0u8; PREFS_RECORD];
+        if let Some(n) = self.get(KEY_PREFS, &mut b)
+            && n >= PREFS_RECORD_V1
+            && let Some(p) = decode_prefs(&b[..n], &node.prefs)
+        {
+            node.prefs = p;
+        }
+        let mut settings = [0u8; SETTINGS_RECORD];
+        let has_settings = self.get(KEY_SERVER, &mut settings) == Some(SETTINGS_RECORD);
+        let mut cnt = [0u8; 1];
+        let count = match self.get(KEY_CLIENT_COUNT, &mut cnt) {
+            Some(1) => usize::from(cnt[0]),
+            _ => 0,
+        };
+        let mut clients: heapless::Vec<[u8; CLIENT_RECORD], 32> = heapless::Vec::new();
+        for i in 0..count.min(32) {
+            let mut rec = [0u8; CLIENT_RECORD];
+            if self.get(CLIENT_BASE + i as u32, &mut rec) == Some(CLIENT_RECORD) {
+                let _ = clients.push(rec);
+            }
+        }
+        let mut file = alloc::vec![0u8; FILE_MAX];
+        let mut head = [0u8; FILE_HEADER + 1];
+        let mut len = 0;
+        if self.get(KEY_REGIONS, &mut head) == Some(FILE_HEADER + 1) {
+            file[..FILE_HEADER].copy_from_slice(&head[..FILE_HEADER]);
+            len = FILE_HEADER;
+            for i in 0..usize::from(head[FILE_HEADER]).min(REGIONS_MAX) {
+                let mut e = [0u8; FILE_ENTRY];
+                if self.get(REGION_BASE + i as u32, &mut e) != Some(FILE_ENTRY) {
+                    break;
+                }
+                file[len..len + FILE_ENTRY].copy_from_slice(&e);
+                len += FILE_ENTRY;
+            }
+        }
+        r.restore(
+            node,
+            has_settings.then_some(&settings[..]),
+            clients.iter().map(|c| &c[..]),
+            (len > 0).then_some(&file[..len]),
+        );
+    }
+
     pub fn erase_all(&mut self) {
         if block_on(self.map.erase_all()).is_err() {
             self.errors += 1;
@@ -386,5 +444,60 @@ impl<S: NorFlash> mc_node::Storage for FlashStore<S> {
         // Estimate: contacts and stored adverts.
         let used = (self.saved_count * (CONTACT_RECORD + 64 + 128)) as u32 / 1024;
         (used, self.len_kb)
+    }
+}
+
+impl<S: NorFlash> ServerStore for FlashStore<S> {
+    fn save_identity(&mut self, prv: &[u8; 64], pub_key: &[u8; 32]) {
+        mc_node::Storage::save_identity(self, prv, pub_key);
+    }
+
+    fn save_node_prefs(&mut self, rec: &[u8; PREFS_RECORD]) {
+        self.put(KEY_PREFS, rec);
+    }
+
+    fn save_settings(&mut self, rec: &[u8; SETTINGS_RECORD]) {
+        self.put(KEY_SERVER, rec);
+    }
+
+    fn save_clients(&mut self, records: &mut dyn Iterator<Item = [u8; CLIENT_RECORD]>) {
+        let mut cnt = [0u8; 1];
+        let old = match self.get(KEY_CLIENT_COUNT, &mut cnt) {
+            Some(1) => u32::from(cnt[0]),
+            _ => 0,
+        };
+        let mut n = 0u32;
+        for rec in records.take(32) {
+            self.put(CLIENT_BASE + n, &rec);
+            n += 1;
+        }
+        for i in n..old {
+            self.remove(CLIENT_BASE + i);
+        }
+        self.put(KEY_CLIENT_COUNT, &[n as u8]);
+    }
+
+    fn save_regions(&mut self, file: &[u8]) {
+        let (Some(header), Some(entries)) = (file.get(..FILE_HEADER), file.get(FILE_HEADER..))
+        else {
+            return;
+        };
+        let mut head = [0u8; FILE_HEADER + 1];
+        let mut old = [0u8; FILE_HEADER + 1];
+        let old_n = match self.get(KEY_REGIONS, &mut old) {
+            Some(k) if k == FILE_HEADER + 1 => u32::from(old[FILE_HEADER]),
+            _ => 0,
+        };
+        let mut n = 0u32;
+        for e in entries.chunks_exact(FILE_ENTRY).take(REGIONS_MAX) {
+            self.put(REGION_BASE + n, e);
+            n += 1;
+        }
+        for i in n..old_n {
+            self.remove(REGION_BASE + i);
+        }
+        head[..FILE_HEADER].copy_from_slice(header);
+        head[FILE_HEADER] = n as u8;
+        self.put(KEY_REGIONS, &head);
     }
 }

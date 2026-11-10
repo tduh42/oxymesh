@@ -7,6 +7,7 @@ pub mod boot;
 pub mod bt;
 pub mod link;
 pub mod radio;
+pub mod server;
 
 /// `mc-core`'s clock: embassy's, in nanoseconds.
 pub fn mc_now() -> mc_core::Instant {

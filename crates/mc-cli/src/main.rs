@@ -88,6 +88,26 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         secs: u64,
     },
+    /// A repeater or room server over the air, through a companion: logs in with
+    /// `password` (empty: as a known client or a guest), then for each line either `status`
+    /// (the 56-byte stats, decoded) or a console command, whose reply is printed.
+    Remote {
+        port: String,
+        /// The server's key, or a prefix of it (hex), as in the companion's contacts.
+        key: String,
+        password: String,
+        lines: Vec<String>,
+    },
+    /// The text console of a repeater (`rpt-m5`, `rpt-heltec-v4`, or a C++ repeater): sends
+    /// each line, prints what comes back (`  -> reply`). Without lines, prints for `--wait`
+    /// seconds (the `Repeater ID:` banner after a restart).
+    Term {
+        port: String,
+        lines: Vec<String>,
+        /// Seconds to wait for a reply to each line.
+        #[arg(long, default_value_t = 3)]
+        wait: u64,
+    },
     /// Radio, core and packet counters (`GET_STATS` 1, 0, 2): noise floor, airtime, errors.
     /// `--every N` repeats every N seconds, `--count` times.
     Stats {
@@ -184,6 +204,13 @@ fn main() {
         Cmd::Cli { port, commands } => console(&port, &commands),
         Cmd::Stats { port, every, count } => stats(&port, every, count),
         Cmd::Log { port, secs } => log(&port, secs),
+        Cmd::Term { port, lines, wait } => term(&port, &lines, wait),
+        Cmd::Remote {
+            port,
+            key,
+            password,
+            lines,
+        } => remote(&port, &key, &password, &lines),
         Cmd::Latency { port, count } => latency(&port, count),
         Cmd::Burst {
             a,
@@ -391,6 +418,168 @@ fn log(path: &str, secs: u64) -> Result<(), String> {
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => return Err(format!("{path}: {e}")),
         }
+    }
+    Ok(())
+}
+
+/// Logs in to a server through a companion, then status requests or console commands.
+fn remote(path: &str, to: &str, password: &str, lines: &[String]) -> Result<(), String> {
+    let mut prefix = [0u8; 32];
+    let n = mc_core::hex::decode_into(to, &mut prefix).ok_or("invalid hex prefix")?;
+    let mut p = Port::open(path, "device")?;
+    p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
+    p.send(&Command::GetContacts { since: None })?;
+    let mut key = None;
+    p.wait(15, |r| match r {
+        Response::Contact(c) => {
+            if c.key[..n] == prefix[..n] {
+                key = Some(c.key);
+            }
+            None
+        }
+        Response::EndOfContacts { .. } => Some(()),
+        _ => None,
+    })?;
+    let _ = p.drain();
+    let key: [u8; 32] =
+        key.ok_or("no such contact: wait for the server's advert (or send one with `advert`)")?;
+    println!("server {}…", mc_core::Hex(&key[..8]));
+    p.ask(&Command::SendLogin {
+        key,
+        password: password.as_bytes(),
+    })?;
+    let login = p.wait(30, |r| match r {
+        Response::LoginSuccess {
+            permissions,
+            server,
+            ..
+        } => Some(Ok((*permissions, *server))),
+        Response::LoginFail { .. } => Some(Err(())),
+        _ => None,
+    });
+    match login {
+        Ok(Ok((admin, Some(s)))) => println!(
+            "logged in: admin {admin}, permissions {}, firmware level {}",
+            s.acl, s.fw_level
+        ),
+        Ok(Ok((admin, None))) => println!("logged in: admin {admin}"),
+        Ok(Err(())) => return Err("login refused".into()),
+        Err(_) => return Err("no answer to the login within 30 s".into()),
+    }
+    for line in lines {
+        if line == "status" {
+            p.ask(&Command::SendStatusReq { key })?;
+            let data = p.wait(20, |r| match r {
+                Response::StatusResponse { data, .. } => Some(data.to_vec()),
+                _ => None,
+            })?;
+            print_status(&data);
+            continue;
+        }
+        p.ask(&Command::SendTxtMsg {
+            txt_type: 1,
+            attempt: 0,
+            timestamp: crate::port::now_unix(),
+            prefix: key[..6].try_into().unwrap_or([0; 6]),
+            text: line.as_bytes(),
+        })?;
+        println!("> {line}");
+        let got = p.wait(20, |r| matches!(r, Response::MsgWaiting).then_some(()));
+        if got.is_err() {
+            println!("  (no reply within 20 s)");
+            continue;
+        }
+        loop {
+            let f = p.ask(&Command::SyncNextMessage)?;
+            match Response::decode(&f) {
+                Ok(Response::ContactMsg { text, .. }) => {
+                    println!("  -> {}", String::from_utf8_lossy(text));
+                    break;
+                }
+                Ok(Response::NoMoreMessages) => break,
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `RepeaterStats` (56 bytes, `docs/spec/server.md` §2.4).
+fn print_status(d: &[u8]) {
+    if d.len() < 56 {
+        println!("status: {} bytes, expected 56", d.len());
+        return;
+    }
+    let u16_at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]);
+    let u32_at = |i: usize| u32::from_le_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]]);
+    println!(
+        "battery {} mV, queue {}, noise {} dBm, last RSSI {} dBm, last SNR {} dB",
+        u16_at(0),
+        u16_at(2),
+        u16_at(4) as i16,
+        u16_at(6) as i16,
+        f64::from(u16_at(42) as i16) / 4.0
+    );
+    println!(
+        "received {} (flood {}, direct {}), sent {} (flood {}, direct {}), duplicates flood {} direct {}",
+        u32_at(8),
+        u32_at(32),
+        u32_at(36),
+        u32_at(12),
+        u32_at(24),
+        u32_at(28),
+        u16_at(46),
+        u16_at(44)
+    );
+    println!(
+        "airtime TX {} s, RX {} s, uptime {} s, errors {:#x}, receive errors {}",
+        u32_at(16),
+        u32_at(48),
+        u32_at(20),
+        u16_at(40),
+        u32_at(52)
+    );
+}
+
+/// Sends console lines (ended by `\r`, as a terminal does) and prints the echo and replies.
+fn term(path: &str, lines: &[String], wait: u64) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+    let mut port = serialport::new(path, 115_200)
+        .timeout(Duration::from_millis(100))
+        .open()
+        .map_err(|e| format!("{path}: {e}"))?;
+    let mut out = std::io::stdout();
+    let mut read_until = |port: &mut Box<dyn serialport::SerialPort>, end: Instant| {
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 512];
+        while Instant::now() < end {
+            match port.read(&mut buf) {
+                Ok(n) => {
+                    seen.extend_from_slice(&buf[..n]);
+                    let _ = out.write_all(&buf[..n]);
+                    let _ = out.flush();
+                    // A reply line is complete.
+                    let text = String::from_utf8_lossy(&seen);
+                    if let Some(i) = text.find("  -> ")
+                        && text[i..].contains('\n')
+                    {
+                        return;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(_) => return,
+            }
+        }
+    };
+    if lines.is_empty() {
+        read_until(&mut port, Instant::now() + Duration::from_secs(wait));
+        return Ok(());
+    }
+    for l in lines {
+        port.write_all(format!("{l}\r").as_bytes())
+            .map_err(|e| format!("{path}: {e}"))?;
+        read_until(&mut port, Instant::now() + Duration::from_secs(wait));
     }
     Ok(())
 }

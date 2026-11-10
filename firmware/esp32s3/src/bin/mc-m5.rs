@@ -56,7 +56,7 @@ use oxymesh_esp32s3::m5;
 use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::link::AppLink;
-use oxymesh_esp32s3::run::radio::{Chip, NoFrontEnd, Radio, Tx};
+use oxymesh_esp32s3::run::radio::{Chip, Companion, NoFrontEnd, Radio, Tx};
 use oxymesh_esp32s3::run::{self, boot, mc_now};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
@@ -502,8 +502,14 @@ async fn main(_spawner: Spawner) -> ! {
             link.poll(dev, ble_sh, now, &mut rng, &mut store);
 
             // Radio; the notification LED lights while transmitting.
-            if let Some(t) = radio.poll(dev, now, &mut rng, &mut store)
-                && let Some(io) = io.as_mut()
+            if let Some(t) = radio.poll(
+                &mut Companion {
+                    dev,
+                    st: &mut store,
+                },
+                now,
+                &mut rng,
+            ) && let Some(io) = io.as_mut()
             {
                 let _ = io.set(pin::LED_NOTIFY, t == Tx::Started);
             }

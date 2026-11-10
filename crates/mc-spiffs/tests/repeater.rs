@@ -126,3 +126,20 @@ fn the_summary_reads_the_same() {
     let s = repeater::summary(&mut fs).unwrap();
     assert_eq!((s.clients, s.regions), (2, 2));
 }
+
+#[test]
+fn from_a_companion_only_identity_and_node_settings() {
+    let mut fs = Spiffs::new(COMPANION, COMPANION.len() as u32).unwrap();
+    let mut st = Mem::default();
+    let s = repeater::import(&mut fs, &mut st).unwrap();
+    assert_eq!((s.clients, s.regions), (0, 0));
+    assert!(st.identity.is_some());
+    let mut sp = ServerPrefs::default();
+    let mut r = Routing::REPEATER;
+    assert!(decode_settings(&st.settings.unwrap(), &mut sp, &mut r));
+    assert!(
+        !r.disable_fwd,
+        "the companion's repeat.disable is not taken"
+    );
+    assert_eq!(sp, ServerPrefs::default());
+}

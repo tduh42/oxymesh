@@ -160,8 +160,9 @@ pub fn summary<F: Flash>(fs: &mut Spiffs<F>) -> Result<Summary, ImportError> {
 }
 
 /// Writes the C++ repeater into `st`: identity, the node's and the repeater's settings, the
-/// access list and the regions. Everything is read before anything is written. The runner
-/// restarts afterwards to load them.
+/// access list and the regions. From a C++ companion, only its identity and node settings.
+/// Everything is read before anything is written. The runner restarts afterwards to load
+/// them.
 pub fn import<F: Flash>(
     fs: &mut Spiffs<F>,
     st: &mut impl ServerStore,
@@ -170,9 +171,13 @@ pub fn import<F: Flash>(
     let mut base = Prefs::defaults(id.pub_key());
     default_node_prefs(&mut base);
     let node = prefs(fs, &base);
+    // From a companion only the identity and the node's settings: its `repeat.disable` (on by
+    // default there) must not switch forwarding off on the repeater.
     let mut sp = ServerPrefs::default();
     let mut routing = Routing::REPEATER;
-    settings(fs, &mut sp, &mut routing);
+    if is_server(fs)? {
+        settings(fs, &mut sp, &mut routing);
+    }
     let acl = clients(fs)?;
     let map = regions(fs)?;
 

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Builds and flashes oxymesh with the board's partition table. Usage: scripts/flash.sh m5|heltec-v4 <port>
+# Builds and flashes oxymesh with the board's partition table.
+# Usage: scripts/flash.sh m5|heltec-v4|m5-repeater|heltec-v4-repeater <port>
 set -euo pipefail
 cd "$(dirname "$0")/../firmware/esp32s3"
-board="${1:?board: m5 or heltec-v4}"
+board="${1:?board: m5, heltec-v4, m5-repeater or heltec-v4-repeater}"
 port="${2:?serial port (ls /dev/cu.*)}"
 case "$board" in
   m5) bin=mc-m5; table=partitions.csv; size=4mb ;;
   heltec-v4) bin=mc-heltec-v4; table=partitions-heltec-v4.csv; size=16mb ;;
+  m5-repeater) bin=rpt-m5; table=partitions.csv; size=4mb ;;
+  heltec-v4-repeater) bin=rpt-heltec-v4; table=partitions-heltec-v4.csv; size=16mb ;;
   *) echo "unknown board: $board" >&2; exit 1 ;;
 esac
 [ -f "$HOME/export-esp.sh" ] && . "$HOME/export-esp.sh"

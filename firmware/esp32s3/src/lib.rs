@@ -1,6 +1,8 @@
 //! MeshCore-compatible firmware for the ESP32-S3: drivers and boards.
 #![no_std]
 
+extern crate alloc;
+
 pub mod battery;
 pub mod ble;
 pub mod buzzer;

@@ -294,6 +294,7 @@ impl Repeater {
             self.push(Action::Reboot);
         } else if c.starts_with("clkreboot") {
             node.rtc.set(now, CLKREBOOT_EPOCH);
+            self.push(Action::ClockSet);
             self.push(Action::Reboot);
         } else if c
             .strip_prefix("advert.zerohop")
@@ -307,6 +308,7 @@ impl Repeater {
         } else if c.starts_with("clock sync") {
             if ts > clock {
                 node.rtc.set(now, ts.wrapping_add(1));
+                self.push(Action::ClockSet);
                 w(out, "OK - clock set: ");
                 push_clock(out, node.rtc.now(now));
             } else {
@@ -320,6 +322,7 @@ impl Repeater {
             let secs = atoi_digits(v);
             if secs > clock {
                 node.rtc.set(now, secs);
+                self.push(Action::ClockSet);
                 w(out, "OK - clock set: ");
                 push_clock(out, node.rtc.now(now));
             } else {

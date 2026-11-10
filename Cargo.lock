@@ -1256,6 +1256,7 @@ dependencies = [
  "mc-core",
  "mc-node",
  "mc-proto",
+ "mc-server",
  "mc-sim",
  "mc-spiffs",
  "mousefood",

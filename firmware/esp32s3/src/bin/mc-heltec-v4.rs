@@ -42,7 +42,7 @@ use oxymesh_esp32s3::battery::{Smoother, percent};
 use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::heltec_v4::{self as board, Fem, UsbWire};
 use oxymesh_esp32s3::run::link::AppLink;
-use oxymesh_esp32s3::run::radio::{Chip, Radio, Tx};
+use oxymesh_esp32s3::run::radio::{Chip, Companion, Radio, Tx};
 use oxymesh_esp32s3::run::{self, boot, mc_now};
 use oxymesh_esp32s3::ssd1306::Ssd1306;
 use oxymesh_esp32s3::sx126x::Sx126x;
@@ -236,7 +236,14 @@ async fn main(_spawner: Spawner) -> ! {
         loop {
             let now = mc_now();
             link.poll(dev, ble_sh, now, &mut rng, &mut store);
-            match radio.poll(dev, now, &mut rng, &mut store) {
+            match radio.poll(
+                &mut Companion {
+                    dev,
+                    st: &mut store,
+                },
+                now,
+                &mut rng,
+            ) {
                 Some(Tx::Started) => led.set_high(),
                 Some(Tx::Done) => led.set_low(),
                 None => {}

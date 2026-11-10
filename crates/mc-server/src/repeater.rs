@@ -116,6 +116,8 @@ pub enum Action {
     GpsSync,
     /// GPS update interval, seconds.
     GpsInterval(u32),
+    /// The console set the clock: a board with a clock chip writes it.
+    ClockSet,
 }
 
 /// The GPS as the board sees it (`LocationProvider`).

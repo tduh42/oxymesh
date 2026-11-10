@@ -1,0 +1,45 @@
+---
+source: crates/mc-ui/tests/server.rs
+expression: "all.join(\"\\n\\n\")"
+---
+|Relay Col     1/6 87%|
+|Repeater   19:33     |
+|Forwarding           |
+|Up 1 h 00 min        |
+|Logins 0  Nbrs 1     |
+|                     |
+
+|Relay Col     2/6 87%|
+|869.618 MHz          |
+|BW 62.5 SF8 CR5      |
+|TX 22 dBm            |
+|Noise -112 dBm       |
+|Air TX 24 s RX 26 s  |
+
+|Relay Col     3/6 87%|
+|Packets  flood direct|
+|Heard       2     31 |
+|Sent        1     31 |
+|Dups        1      0 |
+|Last -90 dBm         |
+
+|Relay Col     4/6 87%|
+|Neighbours 1         |
+|8F999539 10.0 0m     |
+|                     |
+|                     |
+|                     |
+
+|Relay Col     5/6 87%|
+|Advert               |
+|Long press: send     |
+|one, flooded.        |
+|                     |
+|                     |
+
+|Relay Col     6/6 87%|
+|Power off            |
+|Long press: off.     |
+|Press to wake.       |
+|                     |
+|                     |

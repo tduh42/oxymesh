@@ -7,7 +7,7 @@ use embassy_time::{Duration, Instant};
 use log::error;
 use mc_core::noise::NoiseFloor;
 use mc_core::rx_watch::{self, RxWatch, Watch};
-use mc_node::{Device, Prefs, Storage};
+use mc_node::{Device, Node, Prefs, Storage};
 use rand_core::Rng;
 
 use crate::sx126x::{Error, LoRaConfig, Sx126x, irq};
@@ -23,6 +23,45 @@ pub trait FrontEnd {
     fn sleep(&mut self) {}
     /// Settings changed (the LNA setting, for one).
     fn apply(&mut self, _prefs: &Prefs) {}
+}
+
+/// What the radio loop drives: a companion ([`Companion`]) or a server's bare [`Node`].
+pub trait Mesh {
+    fn node(&mut self) -> &mut Node;
+    /// A packet received.
+    fn rx<R: Rng>(&mut self, now: mc_core::Instant, raw: &[u8], snr4: i8, rssi: i16, rng: &mut R);
+    /// The latest noise floor.
+    fn noise_floor(&mut self, _dbm: i16) {}
+}
+
+impl Mesh for Node {
+    fn node(&mut self) -> &mut Node {
+        self
+    }
+
+    fn rx<R: Rng>(&mut self, now: mc_core::Instant, raw: &[u8], snr4: i8, rssi: i16, rng: &mut R) {
+        self.on_rx(now, raw, snr4, rssi, rng);
+    }
+}
+
+/// A companion device and its storage (received packets go through the device's events).
+pub struct Companion<'a, S: Storage> {
+    pub dev: &'a mut Device,
+    pub st: &'a mut S,
+}
+
+impl<S: Storage> Mesh for Companion<'_, S> {
+    fn node(&mut self) -> &mut Node {
+        &mut self.dev.node
+    }
+
+    fn rx<R: Rng>(&mut self, now: mc_core::Instant, raw: &[u8], snr4: i8, rssi: i16, rng: &mut R) {
+        self.dev.on_rx(now, raw, snr4, rssi, rng, self.st);
+    }
+
+    fn noise_floor(&mut self, dbm: i16) {
+        self.dev.noise_floor = dbm;
+    }
 }
 
 /// No front end: the SX1262 drives the antenna itself (ThinkNode M5).
@@ -169,6 +208,22 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         self.transmitting
     }
 
+    /// The noise floor sampled while listening (dBm).
+    pub fn noise_floor(&self) -> i16 {
+        self.noise.floor()
+    }
+
+    /// `tempradio`: other modulation settings on the chip, the node's untouched.
+    pub fn retune(&mut self, cfg: LoRaConfig) {
+        self.cfg = cfg;
+        self.watch.reset();
+        if let Err(e) = self.setup() {
+            error!("SX1262: {e:?}");
+        }
+        self.transmitting = false;
+        self.fe.rx();
+    }
+
     /// Sleeps for hibernation (configuration lost: the boot sets it again).
     pub fn sleep(&mut self) {
         let _ = self.sx.sleep();
@@ -179,16 +234,15 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
     /// the noise floor, and the AGC reset when due. Returns what happened to a transmission.
     pub fn poll(
         &mut self,
-        dev: &mut Device,
+        m: &mut impl Mesh,
         now: mc_core::Instant,
         rng: &mut impl Rng,
-        st: &mut impl Storage,
     ) -> Option<Tx> {
         let mut event = None;
         let flags = self.sx.irq_status().unwrap_or(0);
         let mut cleared = true;
         if flags & irq::TX_DONE != 0 && self.transmitting {
-            dev.tx_done(now);
+            m.node().tx_done(now);
             self.end_tx();
             event = Some(Tx::Done);
         } else if flags & irq::RX_DONE != 0 {
@@ -198,7 +252,7 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
             {
                 let snr4 = i8::try_from(pk.snr_qdb).unwrap_or(0);
                 let n = pk.len.min(self.buf.len());
-                dev.on_rx(now, &self.buf[..n], snr4, pk.rssi_dbm, rng, st);
+                m.rx(now, &self.buf[..n], snr4, pk.rssi_dbm, rng);
             }
             let _ = self.sx.clear_irq();
         } else if flags & irq::CRC_ERR != 0 {
@@ -223,20 +277,18 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         }
         // A transmission that never ended (no TX_DONE): given up after 10 s.
         if self.transmitting && Instant::now() > self.tx_started + Duration::from_secs(10) {
-            dev.tx_done(now);
+            m.node().tx_done(now);
             self.end_tx();
             event = Some(Tx::Done);
         }
 
         let floor = self.noise.floor();
-        let lbt = (
-            dev.node.prefs.interference_threshold,
-            dev.node.prefs.cad_enabled,
-        );
+        let node = m.node();
+        let lbt = (node.prefs.interference_threshold, node.prefs.cad_enabled);
         let (sx, cfg) = (&mut self.sx, &self.cfg);
         if !self.transmitting
             && let Some(f) =
-                dev.poll_tx(now, || channel_busy(sx, rx.receiving, lbt, floor, cfg), rng)
+                node.poll_tx(now, || channel_busy(sx, rx.receiving, lbt, floor, cfg), rng)
         {
             self.fe.tx();
             if self.sx.transmit(self.cfg.preamble, &f.raw).is_ok() {
@@ -257,11 +309,11 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         let sx = &mut self.sx;
         self.noise
             .step(!self.transmitting, rx.receiving, || sx.rssi_inst().ok());
-        dev.noise_floor = self.noise.floor();
+        m.noise_floor(self.noise.floor());
 
         // AGC reset, when set (`agc.reset.interval`): skipped if a packet is coming in or
         // waiting to be read, like the C++.
-        if dev.node.agc_due(now) && !self.transmitting && !rx.receiving && flags & irq::RX_DONE == 0
+        if m.node().agc_due(now) && !self.transmitting && !rx.receiving && flags & irq::RX_DONE == 0
         {
             let r = self.sx.reset_agc().and_then(|()| self.setup());
             if let Err(e) = r {

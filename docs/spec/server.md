@@ -264,3 +264,35 @@ A SPIFFS holding `/s_contacts` or `/regions2` is a server's (`is_server`). The i
 `discovery_mod_timestamp` is not in the C++'s `/prefs.json`, so it restarts at 0. `mc spiffs <image>` shows what an import would bring. The test image is `testdata/spiffs/cpp-repeater.bin`, made up by `testdata/spiffs/gen.py`.
 
 To be written with milestone S2.
+
+## 6. Firmware (`rpt-m5`, `rpt-heltec-v4`)
+
+`firmware/esp32s3/src/bin/rpt-*.rs`, on the shared runner (ADR-0009). The radio loop takes a `run::radio::Mesh`: a companion `Device`, or here a bare `Node`. Flash with `scripts/flash.sh m5-repeater|heltec-v4-repeater <port>`.
+
+- **Each pass:**
+  1. the serial console;
+  2. the radio;
+  3. the node's events to `Repeater::on_event`;
+  4. `Repeater::tick`;
+  5. the actions: saves go to the store (`Repeater::save`); the runner handles restarts, power-off, radio changes, the temporary radio and the GPS.
+- **Serial console** (`run::server::Console`, `main.cpp:155-190`):
+  - at boot it prints `Repeater ID: {key hex}`;
+  - every character is echoed, `\n` is dropped and `\r` ends the line (as does the 159th character);
+  - a non-empty reply is printed as `  -> {reply}`.
+
+  On the M5 it runs on UART0 (CH340, 115,200 baud), on the Heltec on the chip's own USB. `mc term <port> "line" …` sends lines and prints what comes back.
+- **Storage:** `mcdata`, the keys of `flashstore.rs` (§5.1). The identity and node settings use the same keys as the companion, so a board that ran the oxymesh companion keeps its identity and radio settings. The companion's contacts stay, unused.
+- **First boot** (no stored identity): the C++ SPIFFS is imported (§5.2), or a new identity is made.
+- **No Bluetooth**, like the C++ repeater.
+
+| | ThinkNode M5 | Heltec V4 |
+|---|---|---|
+| Name at first start (`ADVERT_NAME`) | `Thinknode M5 Repeater` | `Heltec Repeater` |
+| Neighbours (`MAX_NEIGHBOURS`) | 8 | 50 |
+| GPS | yes: `gps` commands, position, clock | no |
+| Clock chip | PCF8563, read at boot, written when the clock is set | none: the clock starts at 2026-11-05 until `time` or `clock sync` |
+| Front end | none | GC1109 or KCT8103L (`radio.fem.rxgain`, regulatory gain) |
+| Screen | e-paper, §13 of `ui.md` | OLED, §13 of `ui.md` |
+
+From a companion, `mc remote <port> <key prefix> <password> status "get role" …` logs in over the air, then requests the status or runs console commands.
+
