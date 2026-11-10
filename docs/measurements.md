@@ -16,8 +16,15 @@ Log of tests on the real devices. Each entry: date, setup, command, result.
   - `get role` answered `> room_server` and `get guest.password` `> hello`;
   - `room.post` stored a post, and `set repeat on` was refused.
   - The first build said `get repeat` > on: the store's restore had given a fresh room server the repeater's routing (fixed in 7f44b3b, then checked: > off).
-- **Not done yet:** login, status and the console over the air from the C++ Heltec (it did not answer on USB that evening), and a look at the e-paper pages.
 - After the companion firmware went back, `mc info` showed the same key, name and radio. The servers had written nothing to the store.
+- **Over the air, the same evening**, from the Heltec running MeshCore C++ v1.18 (companion, 869.618 MHz, `mc remote`, boards side by side):
+  - **Repeater:** the admin login answered with permissions 3 and firmware level 2. The status decoded (battery 4,075 mV, noise −111 dBm, SNR 12.25 dB). Telemetry gave 4.07 V and 39.0 °C (LPP 116 and 103).
+  - **Room server:**
+    - the room password logged in read-write at firmware level 1, and the 52-byte status decoded;
+    - a post from the Heltec was acknowledged in 955 ms (`mc send`);
+    - a post from the room's console was pushed to the Heltec once, and its ACK ended the push: one push in 40 s, status `posts 2, pushes 1`.
+  - A second login with the password, and later requests, were refused as replays. The Heltec's clock (no clock chip, reset earlier) was 6,216 s behind the Mac's time, which `mc send` had put in the post. The C++ room server does the same. A blank password (a known client) logs in without that check. Setting the Heltec's clock let requests through.
+- **Not done yet:** the console over the air from the Heltec. Its replies come through the companion's message queue, which held the owner's real messages. Also not done: a look at the e-paper pages.
 
 ## 2026-11-10 — the Heltec V4 on oxymesh (B2)
 

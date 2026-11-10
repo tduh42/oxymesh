@@ -89,8 +89,10 @@ enum Cmd {
         secs: u64,
     },
     /// A repeater or room server over the air, through a companion: logs in with
-    /// `password` (empty: as a known client or a guest), then for each line either `status`
-    /// (the 56-byte stats, decoded) or a console command, whose reply is printed.
+    /// `password` (empty: as a known client or a guest), then for each line `status` (the
+    /// stats, decoded), `telemetry` (Cayenne LPP, raw) or a console command, whose reply is
+    /// printed. Console replies are read from the companion's message queue: messages
+    /// already waiting there are taken (and printed) too.
     Remote {
         port: String,
         /// The server's key, or a prefix of it (hex), as in the companion's contacts.
@@ -422,6 +424,11 @@ fn log(path: &str, secs: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Sends a command whose answer is `SENT` (or `OK`).
+fn ask_ok(p: &mut Port, c: &Command<'_>) -> Result<(), String> {
+    p.ask(c).map(|_| ())
+}
+
 /// Logs in to a server through a companion, then status requests or console commands.
 fn remote(path: &str, to: &str, password: &str, lines: &[String]) -> Result<(), String> {
     let mut prefix = [0u8; 32];
@@ -472,6 +479,21 @@ fn remote(path: &str, to: &str, password: &str, lines: &[String]) -> Result<(), 
         Err(_) => return Err("no answer to the login within 30 s".into()),
     }
     for line in lines {
+        if line == "telemetry" {
+            ask_ok(
+                &mut p,
+                &Command::SendTelemetryReq {
+                    reserved: [0; 3],
+                    key: Some(key),
+                },
+            )?;
+            let lpp = p.wait(20, |r| match r {
+                Response::TelemetryResponse { lpp, .. } => Some(lpp.to_vec()),
+                _ => None,
+            })?;
+            println!("telemetry (LPP) {}", mc_core::Hex(&lpp));
+            continue;
+        }
         if line == "status" {
             p.ask(&Command::SendStatusReq { key })?;
             let data = p.wait(20, |r| match r {

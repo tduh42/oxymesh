@@ -10,12 +10,13 @@ SX1262 with an amplifier, 128×64 OLED).
 - **With the app**: the official MeshCore app, meshcore.js and other companion-protocol clients
   work unchanged (Bluetooth and USB).
 - **On the device**: a new interface, usable without a phone.
+- **Three roles**: companion, repeater and room server, as MeshCore's C++ builds.
 
 **Status: experimental.**
 - It runs on a ThinkNode M5 (board v1.0) and has been checked against MeshCore C++ v1.18, over the air and with the app ([`docs/measurements.md`](docs/measurements.md)).
 - The 24-hour endurance run on a live network is still to do.
-- Only the companion role is supported.
-- The Heltec V4 build is new: it builds and its screen is tested in the emulator, but it has not run on the board yet.
+- The Heltec V4 (V4.3) runs too: import from the C++, amplifier, screen and button checked on the board.
+- The repeater and room server are new. A first round on the M5 against a C++ companion passed (logins, status, telemetry, posts pushed and acknowledged). Nothing long-running yet.
 
 ## Getting started
 
@@ -44,6 +45,8 @@ On Linux, `mc` needs the D-Bus headers for its Bluetooth client (`libdbus-1-dev`
    scripts/flash.sh heltec-v4 /dev/cu.usbmodem…
    ```
 
+   For a repeater or a room server: `m5-repeater`, `heltec-v4-repeater`, `m5-room`, `heltec-v4-room`. A server has no Bluetooth, like the C++ one: its console is on USB (`mc term <port> "get role"`), and admins reach it over the air (`mc remote <port> <key> <password> status`, or the MeshCore app through a companion).
+
 **Moving from the C++ firmware.**
 - A fresh board imports the C++ identity, settings, contacts and channels at first boot.
 - On the M5, Settings → System → Import from C++ does it again later.
@@ -67,6 +70,10 @@ The reference is the original MeshCore v1.18 companion firmware on the same M5.
 
 - **The radio and the app see no difference.** Packets are byte for byte those of MeshCore v1.18, and so are the companion protocol's commands and replies. The few behaviour changes below are listed with their reasons in [`docs/spec/companion.md`](docs/spec/companion.md) §9, and none of them is visible to an app.
 - **Radio settings, contacts, channels, adverts, telemetry permissions and the Bluetooth PIN** work as in the C++.
+- **The repeater and the room server** are ports of the C++ servers ([`docs/spec/server.md`](docs/spec/server.md)):
+  - logins, requests (status, telemetry, access list, neighbours), the whole console (on USB and over the air), regions, neighbours and discovery, flood and hop limits, posts pushed until acknowledged;
+  - a C++ server's settings, access list and regions are imported at first boot.
+  - They have no packet log, power saving, OTA update or bridge.
 - **The hardware** is used as the C++ uses it: the clock chip (PCF8563, in UTC) and the GPS (the L76K of board v1.0). The buzzer plays the same tunes.
 
 ### New on the device
@@ -111,7 +118,7 @@ The reference is the original MeshCore v1.18 companion firmware on the same M5.
 
 ### Not there yet
 
-- **Only the companion role.** There are no repeater or room-server builds, which the C++ has.
+- **Servers have only been tried briefly.** No long run yet, and no other C++ repeater relaying through an oxymesh one.
 - **Two boards: the ThinkNode M5 and the Heltec V4.** The C++ supports dozens.
   - On the M5 board v2.0 (AG3352 GPS), oxymesh drives the GPS from its documented wiring (the C++ does not), but it has never run on such a board.
   - The Heltec's optional GPS header is not driven.
