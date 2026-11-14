@@ -43,6 +43,27 @@ impl<'d> Pcf8563<'d> {
         .to_unix()
     }
 
+    /// What the chip holds, for diagnostics: whether it lost power (VL), then the time as read
+    /// even when it is not to be trusted.
+    pub fn inspect(&mut self) -> Result<(bool, Option<u32>), Error> {
+        let mut b = [0u8; 7];
+        self.i2c.write_read(ADDR, &[REG_SECONDS], &mut b)?;
+        let [s, min, h, d, wd, mo, y] = b;
+        let t = (|| {
+            Civil {
+                year: 2000 + i32::from(from_bcd(y)?),
+                month: from_bcd(mo & 0x1F)?,
+                day: from_bcd(d & 0x3F)?,
+                hour: from_bcd(h & 0x3F)?,
+                minute: from_bcd(min & 0x7F)?,
+                second: from_bcd(s & 0x7F)?,
+                weekday: wd & 0x07,
+            }
+            .to_unix()
+        })();
+        Ok((s & VL != 0, t))
+    }
+
     /// Sets the chip (and clears VL); times outside 2000-2099 are not stored.
     pub fn write(&mut self, unix: u32) -> Result<(), Error> {
         let c = Civil::from_unix(unix);

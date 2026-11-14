@@ -98,6 +98,52 @@ impl DrawTarget for Frame {
         }
         Ok(())
     }
+
+    /// A byte at a time where a row covers it: every overlay blanks its rectangle first, and
+    /// filled shapes come here as rows.
+    fn fill_solid(
+        &mut self,
+        area: &embedded_graphics::primitives::Rectangle,
+        color: Self::Color,
+    ) -> Result<(), Self::Error> {
+        let whole = embedded_graphics::primitives::Rectangle::new(
+            embedded_graphics::prelude::Point::zero(),
+            Size::new(WIDTH, HEIGHT),
+        );
+        let a = area.intersection(&whole);
+        let Some(br) = a.bottom_right() else {
+            return Ok(());
+        };
+        let (Ok(x0), Ok(y0), Ok(x1), Ok(y1)) = (
+            u32::try_from(a.top_left.x),
+            u32::try_from(a.top_left.y),
+            u32::try_from(br.x),
+            u32::try_from(br.y),
+        ) else {
+            return Ok(());
+        };
+        let ink = color.is_on();
+        for y in y0..=y1 {
+            let row = y * (WIDTH / 8);
+            let mut x = x0;
+            while x <= x1 {
+                let i = (row + x / 8) as usize;
+                // The bits of this byte inside [x, x1].
+                let first = x % 8;
+                let last = (x1 - (x - first)).min(7);
+                let mask = (0xFFu8 >> first) & (0xFFu8 << (7 - last));
+                if let Some(b) = self.bits.get_mut(i) {
+                    if ink {
+                        *b &= !mask;
+                    } else {
+                        *b |= mask;
+                    }
+                }
+                x = x - first + 8;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The mousefood backend drawing `grid`-sized cells straight into `frame` (no framebuffer copy:
@@ -136,6 +182,39 @@ mod tests {
     use super::*;
     use embedded_graphics::prelude::*;
     use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+
+    /// Byte-wise fills give the same pixels as pixel by pixel, edges and clipping included.
+    #[test]
+    fn fill_solid_matches_pixels() {
+        let mut seed = 7u32;
+        let mut next = |m: i32| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 8) as i32 % m
+        };
+        for _ in 0..500 {
+            let r = Rectangle::new(
+                Point::new(next(230) - 15, next(230) - 15),
+                Size::new(next(60) as u32, next(60) as u32),
+            );
+            let on = next(2) == 0;
+            let c = if on {
+                BinaryColor::On
+            } else {
+                BinaryColor::Off
+            };
+            let mut a = Frame::new();
+            let mut b = Frame::new();
+            // A pattern underneath, so both set and cleared bits are checked.
+            for f in [&mut a, &mut b] {
+                for (i, x) in f.bits.iter_mut().enumerate() {
+                    *x = (i as u8).wrapping_mul(37);
+                }
+            }
+            a.fill_solid(&r, c).unwrap();
+            b.draw_iter(r.points().map(|p| Pixel(p, c))).unwrap();
+            assert!(a == b, "{r:?} {on}");
+        }
+    }
 
     #[test]
     fn pixels_land_in_the_panel_layout() {

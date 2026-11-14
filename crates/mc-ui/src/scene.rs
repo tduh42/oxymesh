@@ -479,52 +479,66 @@ pub fn width(font: Font, s: &str) -> i16 {
         .map_or(0, |d| i16::try_from(d.advance.x).unwrap_or(i16::MAX))
 }
 
+/// Width of one character: advances add up, so strings are measured in one pass.
+fn char_width(font: Font, c: char) -> i16 {
+    let mut b = [0u8; 4];
+    width(font, c.encode_utf8(&mut b))
+}
+
 /// `s` cut to `w` pixels, ending with `...` when cut.
 pub fn ellipsize(font: Font, s: &str, w: i16) -> String {
-    if width(font, s) <= w {
-        return String::from(s);
-    }
-    let mut out = String::new();
-    for ch in s.chars() {
-        out.push(ch);
-        let mut t = String::from(out.trim_end());
-        t.push_str("...");
-        if width(font, &t) > w {
-            out.pop();
-            break;
+    let dots = width(font, "...");
+    let mut total = 0i16;
+    // Where the text can stop with the dots still fitting.
+    let mut keep = 0;
+    for (i, ch) in s.char_indices() {
+        let cw = char_width(font, ch);
+        if total.saturating_add(cw).saturating_add(dots) <= w {
+            keep = i + ch.len_utf8();
+        }
+        total = total.saturating_add(cw);
+        if total > w {
+            let mut t = String::from(s.get(..keep).unwrap_or("").trim_end());
+            t.push_str("...");
+            return t;
         }
     }
-    let mut t = String::from(out.trim_end());
-    t.push_str("...");
-    t
+    String::from(s)
 }
 
 /// `s` in lines of at most `w` pixels, broken at spaces; a word longer than a line is cut.
 pub fn wrap(font: Font, s: &str, w: i16) -> Vec<String> {
+    let space = char_width(font, ' ');
     let mut lines: Vec<String> = Vec::new();
     for para in s.split('\n') {
         let mut line = String::new();
+        let mut lw = 0i16;
         for word in para.split(' ') {
-            let mut t = line.clone();
-            if !t.is_empty() {
-                t.push(' ');
-            }
-            t.push_str(word);
-            if width(font, &t) <= w {
-                line = t;
+            let ww = word
+                .chars()
+                .fold(0i16, |a, c| a.saturating_add(char_width(font, c)));
+            let add = if line.is_empty() { ww } else { space + ww };
+            if lw.saturating_add(add) <= w {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                lw += add;
                 continue;
             }
             if !line.is_empty() {
                 lines.push(core::mem::take(&mut line));
+                lw = 0;
             }
             // The word alone, cut where it no longer fits.
             for ch in word.chars() {
-                let mut t = line.clone();
-                t.push(ch);
-                if width(font, &t) > w && !line.is_empty() {
+                let cw = char_width(font, ch);
+                if lw.saturating_add(cw) > w && !line.is_empty() {
                     lines.push(core::mem::take(&mut line));
+                    lw = 0;
                 }
                 line.push(ch);
+                lw = lw.saturating_add(cw);
             }
         }
         lines.push(line);
@@ -554,6 +568,19 @@ mod tests {
         // A word longer than the line is cut, not lost.
         let long = wrap(Font::R10, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 60);
         assert!(long.len() > 1 && long.concat().len() == 40);
+        // Advances add up: what the one-pass measuring relies on.
+        for f in [
+            Font::R8,
+            Font::B8,
+            Font::R10,
+            Font::B10,
+            Font::R12,
+            Font::B12,
+        ] {
+            let s = "Snow on the pass, take chains! œuf à 4?";
+            let sum: i16 = s.chars().map(|c| char_width(f, c)).sum();
+            assert_eq!(sum, width(f, s), "{f:?}");
+        }
         // French accents and œ are in the fonts.
         assert!(width(Font::R10, "œuf à é") > width(Font::R10, "uf  "));
     }

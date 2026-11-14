@@ -122,6 +122,7 @@ cargo run --release -p mc-cli -- remote <port> <key prefix> <password> status "g
 cargo run --release -p mc-cli -- ui --png local/ui-png   # every screen of the tour as panel-exact PNG
 INSTA_UPDATE=always cargo test -p mc-ui              # accept changed screen snapshots (review the diff!)
 cargo run --release -p mc-cli -- advert <port> [--flood]   # make a companion advertise (also sets its clock)
+cargo run --release -p mc-cli -- time <port>                # set a companion's clock to the computer's, nothing on air
 cargo run --release -p mc-cli -- send <port> <key prefix hex> "text"   # direct message, waits for the delivery
 cargo run --release -p mc-cli -- inbox <port>               # fetch and print the messages waiting on a companion
 cargo run --release -p mc-cli -- burst --a <receiver> --b <sender> --count 20 --gap 1500   # B sends A a burst of DMs; confirmations and what A queued

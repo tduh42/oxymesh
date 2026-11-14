@@ -594,7 +594,7 @@ async fn main(_spawner: Spawner) -> ! {
                     diag::log();
                     // Boot lines can be lost on the CH340 (FIFO overrun); the state again here.
                     info!(
-                        "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {}",
+                        "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {}; clock chip {:?} (lost power, time)",
                         Instant::now().as_secs(),
                         boots::last(),
                         if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
@@ -611,6 +611,7 @@ async fn main(_spawner: Spawner) -> ! {
                         dev.noise_floor,
                         dev.mcu_temp_deci,
                         dev.node.rtc.now(mc_now()),
+                        rtc_chip.as_mut().map(Pcf8563::inspect),
                     );
                 }
                 let raw_mv = adc.read_blocking(&mut bat_pin);
@@ -800,9 +801,25 @@ async fn main(_spawner: Spawner) -> ! {
                 if want_draw {
                     want_draw = false;
                     let c = ui_ctx(dev, ble_of(&ble_sh), charging, light);
+                    #[cfg(feature = "debug-log")]
+                    let t0 = Instant::now();
                     let _ = term.draw(|f| app.draw(f, &c));
+                    #[cfg(feature = "debug-log")]
+                    let t1 = Instant::now();
                     for o in app.overlays() {
                         let _ = overlay::draw(o, term.backend_mut().display_mut());
+                    }
+                    #[cfg(feature = "debug-log")]
+                    {
+                        let h = esp_alloc::HEAP.stats();
+                        info!(
+                            "ui: draw {} us, overlays {} us ({}); heap {} now, {} peak",
+                            (t1 - t0).as_micros(),
+                            t1.elapsed().as_micros(),
+                            app.overlays().len(),
+                            h.current_usage,
+                            h.max_usage
+                        );
                     }
                     prev.bits = cur.bits;
                     let u = dev.node.prefs.ui;

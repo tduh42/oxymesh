@@ -125,6 +125,8 @@ enum Cmd {
         #[arg(required = true)]
         commands: Vec<String>,
     },
+    /// Set the device's clock to this computer's (SET_DEVICE_TIME), nothing sent over the air.
+    Time { port: String },
     /// Make the device send its advert (zero hop unless `--flood`).
     Advert {
         port: String,
@@ -199,6 +201,7 @@ fn main() {
             channel,
         } => sniff(&port, secs, &channel),
         Cmd::Inject { port, hex, prio } => inject(&port, &hex, prio),
+        Cmd::Time { port } => set_time(&port),
         Cmd::Advert { port, flood } => advert(&port, flood),
         Cmd::Inbox { port } => inbox(&port),
         Cmd::Spiffs { image } => spiffs(&image),
@@ -387,6 +390,16 @@ fn advert(path: &str, flood: bool) -> Result<(), String> {
         unix_s: crate::port::now_unix(),
     })?;
     p.ask(&Command::SendSelfAdvert { flood: Some(flood) })?;
+    Ok(())
+}
+
+fn set_time(path: &str) -> Result<(), String> {
+    let mut p = Port::open(path, "device")?;
+    p.verbose = true;
+    p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
+    p.ask(&Command::SetDeviceTime {
+        unix_s: crate::port::now_unix(),
+    })?;
     Ok(())
 }
 

@@ -2,6 +2,27 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-14 — pixel screens on the M5 (U10), clock chip
+
+- Setup: `mc-m5` with `debug-log`, which now logs each frame's draw time, overlay paint time and heap. Read with `mc log`, the screens moved by hand.
+- Image: 1,533,120 B, 84 % of the app partition (72 % before U9: the Helvetica sizes, Spleen digits and Open Iconic).
+
+| Per frame | Text screen | Pixel screen (Home) |
+|---|---|---|
+| First build: Ratatui draw + scene | 9-30 ms | 9 ms |
+| First build: overlays painted | 10-15 ms | 13.4 ms |
+| After the fixes below: draw | 8.5 ms | 5.8 ms |
+| After the fixes below: overlays | 1.7 ms | 6.1 ms |
+
+- Three fixes:
+  - text is measured in one pass (glyph advances add up; a test checks it), where `wrap` and `ellipsize` re-measured the whole string per character;
+  - on the panel, a screen with a scene no longer also draws its hidden text version;
+  - the panel frame fills rectangles a byte at a time (`fill_solid`). Every overlay blanks its rectangle first, and filled shapes arrive as rows.
+- A frame now costs 10-12 ms before the 542 ms partial refresh, on par with U0's 6 ms grid demo plus the header and footer.
+- Heap peak 57,336 of 98,300 B (61,004 B in the first build); stack peak 30,784 of 61,156 B.
+- **Clock chip**: the M5 showed 2026-11-05 17:33, the firmware's floor. The PCF8563 had its VL flag set and counted from 2000-01-01, so it had lost power about 1 h 40 min before, with the battery at 4.1 V. The firmware rightly ignores such a time. `mc time` (new: SET_DEVICE_TIME only, nothing on air) set the clock, the M5 wrote it back, and VL cleared. The cause of the power loss is not known; the M5 has no separate cell for the chip. The `debug-log` status line now shows the chip's state.
+- **GPS**: indoors, 0 satellites for several minutes after boot, with sentences flowing (about 340 B/s, no errors), as on 2026-11-08. No fix has been seen on this M5 yet: it needs a test with sky in view.
+
 ## 2026-11-10 — the repeater and the room server on the M5 (S1d, S2)
 
 - Setup: the ThinkNode M5 flashed with `rpt-m5`, then `room-m5`, over its oxymesh companion store, then given its companion firmware back. `mc term` on the CH340 port.

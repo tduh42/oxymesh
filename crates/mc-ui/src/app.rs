@@ -538,7 +538,6 @@ impl App {
         let title = top.title(&ui);
         let header_time = top.header_time();
         chrome::header(f, areas.header, &title, header_time, &ui);
-        top.draw(f, areas.body, &ui);
         self.overlays.clear();
         let covered = self.popup.is_some() || self.banner.is_some();
         let (cw, ch) = cell_px(self.grid);
@@ -556,6 +555,10 @@ impl App {
         } else {
             None
         };
+        // The text version is for the terminal and the snapshots: the panel only needs one.
+        if body_scene.is_none() {
+            top.draw(f, areas.body, &ui);
+        }
         if let Some((at, scene)) = body_scene {
             skip(f, areas.body);
             self.overlays.push(Overlay::Scene { at, scene });
