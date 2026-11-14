@@ -9,11 +9,11 @@ expression: "text(&mut app, grid, &c)"
 |                         |
 |                         |
 |──────────────────── 6/31|
-|space e é è ê a à â s i t|
-|n r u l o d c ç m p v q f|
-|b g h j x y z w k œ ô û î|
-|ï ë ü 0 1 2 3 4 5 6 7 8 9|
-|- _ . ' Save             |
+|space abcdef ghijkl      |
+|mnopqr stuvwx yzéèàçêù   |
+|_-_.'0123456789âôîûœëïü  |
+|Save                     |
+|                         |
 |                         |
 |                         |
 |A▸next hold▸add  B◂delete|

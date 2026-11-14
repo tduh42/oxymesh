@@ -1,0 +1,19 @@
+---
+source: crates/mc-ui/tests/screens.rs
+expression: "text(&mut app, grid, &c)"
+---
+|To Bob       ●2 18:33 87%|
+|_                        |
+|                         |
+|                         |
+|                         |
+|                         |
+|─────────────────── 0/160|
+|M N O P Q R              |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|A▸next hold▸add    B◂back|

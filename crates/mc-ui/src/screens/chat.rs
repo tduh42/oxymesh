@@ -20,7 +20,7 @@ use crate::act::{Intent, Outcome};
 use crate::app::{Input, Nav, Screen, Ui};
 use crate::chrome::{self, Footer};
 use crate::clock;
-use crate::keyboard::{Cand, Key, Keyboard, Mode, recent_words};
+use crate::keyboard::{Cand, Key, Keyboard, Mode, Stop, recent_words, row_label};
 use crate::scene::{self, Align, Font, Icon, IconSize, Scene};
 use crate::theme;
 
@@ -465,6 +465,55 @@ impl Screen for Conversation {
 
 // ------------------------------------------------------------------ writing
 
+/// The body height a scene gets (its argument), as a signed pixel count.
+fn h_body(h: u16) -> i16 {
+    i16::try_from(h).unwrap_or(i16::MAX)
+}
+
+/// A rounded chip with its label, filled when selected.
+#[allow(clippy::too_many_arguments)]
+fn chip(sc: &mut Scene, x: i16, y: i16, w: u16, h: u16, font: Font, label: &str, sel: bool) {
+    sc.rect(x, y, w, h, (h / 2).min(6) as u8, Some(sel), Some(true));
+    let base = y + (h as i16 + font.ascent()) / 2;
+    sc.text(x + w as i16 / 2, base, font, Align::Center, !sel, label);
+}
+
+/// A key: a letter in a box, the space as `⎵` drawn in lines.
+fn key_box(sc: &mut Scene, x: i16, y: i16, c: &Cand, sel: bool) {
+    sc.rect(x, y, 19, 19, 3, Some(sel), Some(true));
+    match c {
+        Cand::Space => {
+            let ink = !sel;
+            let (l, r, b) = (x + 4, x + 14, y + 13);
+            sc.items.push(scene::Item::Line {
+                x0: l,
+                y0: b - 4,
+                x1: l,
+                y1: b,
+                ink,
+            });
+            sc.items.push(scene::Item::Line {
+                x0: l,
+                y0: b,
+                x1: r,
+                y1: b,
+                ink,
+            });
+            sc.items.push(scene::Item::Line {
+                x0: r,
+                y0: b - 4,
+                x1: r,
+                y1: b,
+                ink,
+            });
+        }
+        c => {
+            let t = c.label(Mode::Name);
+            sc.text(x + 10, y + 15, Font::B12, Align::Center, !sel, &t);
+        }
+    }
+}
+
 /// What the text is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
@@ -623,6 +672,164 @@ impl Screen for Compose {
         }
     }
 
+    /// The text, then what a long A can insert: predicted letters (or the open row's
+    /// characters), word completions and the final action, the rows in two columns; quick
+    /// replies in place of the empty text.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let hashtag = self.target == Target::Hashtag;
+        let kb = self.kb(ui);
+        let wi = w as i16;
+        let mut sc = Scene::new();
+        let at = |i: usize| kb.inner.is_none() && kb.sel == i;
+        // Quick replies where the text goes, while it is empty.
+        let replies: Vec<(usize, String)> = kb
+            .stops()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| match s {
+                Stop::One(Cand::Reply(r)) => Some((i, r.clone())),
+                _ => None,
+            })
+            .collect();
+        if replies.is_empty() {
+            let shown = if hashtag {
+                format!("#{}", kb.text)
+            } else {
+                kb.text.clone()
+            };
+            let lines = scene::wrap(Font::R12, &shown, wi - 10);
+            let last = lines.len().saturating_sub(2);
+            for (i, l) in lines.iter().skip(last).enumerate() {
+                sc.text(4, 14 + 15 * i as i16, Font::R12, Align::Left, true, l);
+            }
+            let n = lines.len().clamp(1, 2) as i16;
+            let tail = lines.last().map_or(0, |l| scene::width(Font::R12, l));
+            sc.rect(5 + tail, 3 + 15 * (n - 1), 2, 13, 0, Some(true), None);
+        } else {
+            let (mut x, mut y) = (2i16, 1i16);
+            for (i, r) in &replies {
+                let r = scene::ellipsize(Font::R8, r, wi - 14);
+                let cw = scene::width(Font::R8, &r) + 10;
+                if x + cw > wi - 2 && x > 2 {
+                    x = 2;
+                    y += 14;
+                }
+                chip(&mut sc, x, y, cw as u16, 13, Font::R8, &r, at(*i));
+                x += cw + 3;
+            }
+        }
+        let count = format!("{}/{}", kb.bytes(), kb.mode.limit());
+        sc.text(wi - 3, 41, Font::R8, Align::Right, true, &count);
+        sc.hline(0, wi - 1, 43);
+        // Line A: the letters to insert with a long A (or the open row's characters).
+        let open = match (kb.inner, kb.stops().get(kb.sel)) {
+            (Some(i), Some(Stop::Row(items))) => Some((i, items.clone())),
+            _ => None,
+        };
+        let keys: Vec<(Cand, bool)> = match &open {
+            Some((i, items)) => {
+                let per = ((wi - 4) / 21).max(1) as usize;
+                let first = i
+                    .saturating_sub(per / 2)
+                    .min(items.len().saturating_sub(per));
+                items
+                    .iter()
+                    .enumerate()
+                    .skip(first)
+                    .take(per)
+                    .map(|(j, c)| (c.clone(), j == *i))
+                    .collect()
+            }
+            None => kb
+                .stops()
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| match s {
+                    Stop::One(c @ (Cand::Char(_) | Cand::Space)) => Some((c.clone(), at(i))),
+                    _ => None,
+                })
+                .collect(),
+        };
+        for (k, (c, sel)) in keys.iter().enumerate() {
+            key_box(&mut sc, 3 + 21 * k as i16, 47, c, *sel);
+        }
+        // Line B: completions, and the final action on the right.
+        let done_w = 58u16;
+        let mut x = 3i16;
+        for (i, s) in kb.stops().iter().enumerate() {
+            match s {
+                Stop::One(Cand::Word(word)) => {
+                    let room = wi - done_w as i16 - 8 - x;
+                    let word = scene::ellipsize(Font::R10, word, room - 10);
+                    let cw = scene::width(Font::R10, &word) + 10;
+                    if cw > 10 && cw <= room {
+                        chip(&mut sc, x, 70, cw as u16, 16, Font::R10, &word, at(i));
+                        x += cw + 3;
+                    }
+                }
+                Stop::One(Cand::Done) => {
+                    let dx = wi - done_w as i16 - 2;
+                    let sel = at(i);
+                    sc.rect(dx, 69, done_w, 18, 4, Some(sel), Some(true));
+                    sc.icon(dx + 5, 74, Icon::Check, IconSize::S8, !sel);
+                    let label = kb.mode.action();
+                    sc.text(dx + 16, 82, Font::B10, Align::Left, !sel, label);
+                }
+                _ => {}
+            }
+        }
+        // The rows, in two columns, top to bottom.
+        let rows: Vec<(usize, &Vec<Cand>)> = kb
+            .stops()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| match s {
+                Stop::Row(items) => Some((i, items)),
+                _ => None,
+            })
+            .collect();
+        let per_col = rows.len().div_ceil(2).max(1);
+        let col_w = (wi - 6) / 2;
+        let rh = ((h_body(h) - 92) / per_col as i16).clamp(12, 19);
+        for (k, (i, items)) in rows.iter().enumerate() {
+            let (col, row) = ((k / per_col) as i16, (k % per_col) as i16);
+            let (x, y) = (2 + col * (col_w + 2), 91 + row * rh);
+            let selected = at(*i);
+            let is_open = kb.inner.is_some() && kb.sel == *i;
+            sc.rect(
+                x,
+                y,
+                col_w as u16,
+                (rh - 2) as u16,
+                3,
+                Some(selected),
+                Some(selected || is_open),
+            );
+            if is_open {
+                sc.rect(
+                    x + 1,
+                    y + 1,
+                    col_w as u16 - 2,
+                    (rh - 4) as u16,
+                    2,
+                    None,
+                    Some(true),
+                );
+            }
+            let label: String = items
+                .iter()
+                .map(|c| match c {
+                    Cand::Char(ch) => String::from(*ch),
+                    _ => String::from("_"),
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let label = scene::ellipsize(Font::R10, &label, col_w - 8);
+            sc.text(x + 5, y + rh - 6, Font::R10, Align::Left, !selected, &label);
+        }
+        Some(sc)
+    }
+
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let w = usize::from(body.width);
         let hashtag = self.target == Target::Hashtag;
@@ -645,12 +852,28 @@ impl Screen for Compose {
             "─".repeat(w.saturating_sub(count.chars().count()))
         );
         f.render_widget(Paragraph::new(rule), rows(body, box_h, 1));
-        // Candidates, flowed into the rows left; the page holding the selection.
+        // The stops (or the open row's characters), flowed into the rows left; the page
+        // holding the selection.
         let area = rows(body, box_h + 1, body.height.saturating_sub(box_h + 1));
+        let (labels, sel): (Vec<String>, usize) = match (kb.inner, kb.stops().get(kb.sel)) {
+            (Some(i), Some(Stop::Row(items))) => {
+                (items.iter().map(|c| c.label(kb.mode)).collect(), i)
+            }
+            _ => (
+                kb.stops()
+                    .iter()
+                    .map(|s| match s {
+                        Stop::One(c) => c.label(kb.mode),
+                        Stop::Row(items) => row_label(items),
+                    })
+                    .collect(),
+                kb.sel,
+            ),
+        };
         let mut lines: Vec<Vec<(usize, String)>> = alloc::vec![Vec::new()];
         let mut len = 0usize;
-        for (i, c) in kb.candidates().iter().enumerate() {
-            let label = chrome::fit(&c.label(kb.mode), w);
+        for (i, label) in labels.iter().enumerate() {
+            let label = chrome::fit(label, w);
             let l = label.chars().count();
             if len > 0 && len + 1 + l > w {
                 lines.push(Vec::new());
@@ -664,7 +887,7 @@ impl Screen for Compose {
         let per_page = usize::from(area.height).max(1);
         let sel_line = lines
             .iter()
-            .position(|l| l.iter().any(|(i, _)| *i == kb.sel))
+            .position(|l| l.iter().any(|(i, _)| *i == sel))
             .unwrap_or(0);
         let first = sel_line / per_page * per_page;
         for (row, line) in lines.iter().skip(first).take(per_page).enumerate() {
@@ -673,7 +896,7 @@ impl Screen for Compose {
                 if k > 0 {
                     spans.push(ratatui_core::text::Span::raw(" "));
                 }
-                let style = if *i == kb.sel {
+                let style = if *i == sel {
                     theme::reversed()
                 } else {
                     Style::new()
@@ -711,16 +934,23 @@ impl Screen for Compose {
 
     fn footer(&self, _ui: &Ui<'_>) -> Footer {
         let empty = self.kb.as_ref().is_none_or(|k| k.text.is_empty());
-        let done = self
-            .kb
-            .as_ref()
-            .and_then(|k| k.selected())
-            .is_some_and(|c| *c == Cand::Done);
+        let in_row = self.kb.as_ref().is_some_and(|k| k.inner.is_some());
+        let hold = match self.kb.as_ref().map(|k| (k.selected(), k.inner)) {
+            Some((Some(Cand::Done), _)) => "done",
+            Some((None, None)) => "open",
+            _ => "add",
+        };
         Footer {
             a_click: Some("next"),
-            a_hold: Some(if done { "done" } else { "add" }),
+            a_hold: Some(hold),
             a_double: None,
-            b_click: Some(if empty { "cancel" } else { "delete" }),
+            b_click: Some(if in_row {
+                "back"
+            } else if empty {
+                "cancel"
+            } else {
+                "delete"
+            }),
             b_hold: None,
         }
     }

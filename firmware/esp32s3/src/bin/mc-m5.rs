@@ -654,7 +654,11 @@ async fn main(_spawner: Spawner) -> ! {
                     if light && timeout > 0 {
                         light_until = now_ms + timeout;
                     }
+                    #[cfg(feature = "debug-log")]
+                    let t0 = Instant::now();
                     app.gesture(g, &c);
+                    #[cfg(feature = "debug-log")]
+                    info!("ui: {g:?} {} us", t0.elapsed().as_micros());
                 }
                 if now_ms >= next_ui_tick {
                     next_ui_tick = now_ms + UI_TICK_MS;

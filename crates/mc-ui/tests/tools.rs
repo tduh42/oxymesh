@@ -231,19 +231,26 @@ fn snapshots() {
 impl Rig {
     /// In a text entry: types `text` candidate by candidate, then the final action.
     fn type_text(&mut self, text: &str) {
-        use mc_ui::keyboard::Cand;
+        use mc_ui::keyboard::{Cand, Move};
         for ch in text.chars() {
-            let want = Cand::Char(ch);
-            let mut found = false;
-            for _ in 0..120 {
-                if self.app.keyboard().and_then(|k| k.selected()) == Some(&want) {
-                    self.press(&[Long(A)]);
-                    found = true;
-                    break;
-                }
-                self.press(&[Click(A)]);
+            let want = if ch == ' ' {
+                Cand::Space
+            } else {
+                Cand::Char(ch)
+            };
+            let route = self
+                .app
+                .keyboard()
+                .and_then(|k| k.route(&want))
+                .unwrap_or_else(|| panic!("{ch} not offered"));
+            for m in route {
+                self.press(&[match m {
+                    Move::Next => Click(A),
+                    Move::Prev => Double(A),
+                    Move::Open => Long(A),
+                    Move::Back => Click(B),
+                }]);
             }
-            assert!(found, "{ch} not offered");
         }
         self.press(&[Double(A), Long(A)]);
     }

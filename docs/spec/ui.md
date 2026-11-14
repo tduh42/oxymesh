@@ -105,10 +105,19 @@ Home (always-on face)
 
 ## 7. Two-button text entry
 
-- Text box at the top, candidate strip at the bottom; the byte count and the 160-byte limit are shown live.
-- A click / double click moves through the candidates; a long A inserts the current one. B click deletes the last character; B on empty text cancels.
-- Candidate order: quick replies (empty text only); up to 4 completions of the word being typed, your recent words first, then a built-in French and English list (about 600 common and messaging words to start; the goal stays about 2,000 per language); `space`; letters by frequency (`e é è ê a à â s i t n r u l o d c ç m p…`); digits and punctuation; the final action (`Send`, `Save`, `Add`) last, one double click away. A quick reply moves the cursor straight to `Send`.
-- The first letter of a sentence is offered in upper case. `#channel` names: lower-case ASCII letters, digits and `-`.
+- Text at the top with the byte count and the 160-byte limit, live; below it what a long A can insert.
+- **Two levels.** The first is a ring of stops; a click moves to the next one, a double click to the previous one. A long A inserts a letter or a word, or opens a row. In an open row a click moves along it and a long A inserts, then the cursor is back on the first stop. B leaves an open row; otherwise B deletes the last character, and on an empty text it cancels.
+- **The ring, in order:**
+  - the quick replies (empty text only; in place of the text on the panel);
+  - the 4 letters most likely to come next, best first;
+  - 2 completions of the word being typed;
+  - the rows: `a b c d e f`, `g h i j k l`, `m n o p q r`, `s t u v w x`, `y z é è à ç ê ù`, then space, punctuation, digits, the rarer accents (`â ô î û œ ë ï ü`) and symbols in the last;
+  - the final action (`Send`, `Save`, `Add`, `Login`) last, one double click from the first stop.
+- **Prediction** (`mc_ui::keyboard`): each next character scores the words that continue the text with it, a word weighing by its rank in the built-in lists (about 1,900 French and 2,100 English words, most frequent first, written for oxymesh) and more for the words of your own sent messages. A whole word scores the space, and the punctuation after it (`, . ? !`, `?` and `!` also after a space, French style). After an apostrophe the word that follows is predicted too (`J'arr` → `J'arrive`). A word no list knows offers the space first.
+- An opened row starts on its most likely character among those not already a stop of their own.
+- The first letter of a sentence is upper case. Hashtag names: lower-case ASCII letters, digits and `-`; names and passwords get no prediction; passwords have rows of lower and upper case letters, digits and symbols; digits (PIN, frequency) are a plain ring.
+- **On the panel:** the text in Helvetica 12 with a cursor; one line of keys with the predicted letters (the space drawn as `⎵`), or the open row's characters; the completions as chips with the final action on the right; the rows in two columns, the selected one filled, the open one framed.
+- **Measured** (`crates/mc-ui/tests/typing.rs`): 14 French and English messages take 1,067 presses, 2,864 with the single ring this replaced (37 %). The test fails above 60 %.
 - Long messages still come from the phone app.
 
 ## 8. Notifications

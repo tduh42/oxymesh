@@ -23,6 +23,21 @@ pub const TOUR: &[(&str, &[Gesture])] = &[
         "compose_quick_reply",
         &[Long(A), Click(A), Long(A), Long(A), Long(A)],
     ),
+    // Back from the first stop: the rows from the last; "M N O P Q R" opened.
+    (
+        "compose_row_open",
+        &[
+            Long(A),
+            Click(A),
+            Long(A),
+            Long(A),
+            Double(A),
+            Double(A),
+            Double(A),
+            Double(A),
+            Long(A),
+        ],
+    ),
     ("new_message_picker", &[Long(A), Long(A)]),
     ("contacts", &[Click(A), Long(A)]),
     ("contact", &[Click(A), Long(A), Long(A)]),

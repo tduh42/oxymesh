@@ -7,7 +7,7 @@ use mc_node::history::{Peer, Status};
 use mc_sim::World;
 use mc_ui::app::{App, Ctx};
 use mc_ui::input::{Button::*, Gesture::*};
-use mc_ui::keyboard::Cand;
+use mc_ui::keyboard::{Cand, Move};
 use mc_ui::panel::LARGE;
 use mc_ui::perform;
 use rand_core::SeedableRng;
@@ -136,16 +136,21 @@ impl Rig {
             .join("\n")
     }
 
-    /// Moves to the candidate `want` with A clicks and inserts it with a long A.
+    /// Inserts the candidate `want` the cheapest way the keyboard knows (`Keyboard::route`).
     fn type_cand(&mut self, want: &Cand) {
-        for _ in 0..200 {
-            if self.app.keyboard().and_then(|k| k.selected()) == Some(want) {
-                self.press(&[Long(A)]);
-                return;
-            }
-            self.press(&[Click(A)]);
+        let route = self
+            .app
+            .keyboard()
+            .and_then(|k| k.route(want))
+            .unwrap_or_else(|| panic!("candidate {want:?} not offered"));
+        for m in route {
+            self.press(&[match m {
+                Move::Next => Click(A),
+                Move::Prev => Double(A),
+                Move::Open => Long(A),
+                Move::Back => Click(B),
+            }]);
         }
-        panic!("candidate {want:?} not found");
     }
 
     fn last_sent(&self) -> Status {
