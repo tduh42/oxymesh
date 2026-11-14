@@ -315,6 +315,11 @@ impl<'d> Sx126x<'d> {
         self.dio1.wait_for_rising_edge().await;
     }
 
+    /// DIO1, to wake the chip from light sleep.
+    pub fn irq_pin(&mut self) -> &mut Input<'d> {
+        &mut self.dio1
+    }
+
     pub fn dio1(&self) -> bool {
         self.dio1.is_high()
     }

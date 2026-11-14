@@ -8,6 +8,7 @@ pub mod bt;
 pub mod link;
 pub mod radio;
 pub mod server;
+pub mod sleep;
 
 /// The earliest of the times something is due, for the main loop's sleep.
 pub struct Deadline(embassy_time::Instant);

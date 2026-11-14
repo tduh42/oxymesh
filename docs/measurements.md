@@ -2,6 +2,14 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-14 — repeater light sleep on the M5 (P2)
+
+- Setup: `rpt-m5` over the companion store, `powersaving on` (answer `on - After 2 minutes`), the C++ Heltec as the other radio, `mc term` on the CH340 port (it does not reset the M5).
+- Past 2 minutes of uptime, three zero-hop adverts from the Heltec 8 s apart all counted (`stats-packets` direct_rx 3): DIO1 wakes it.
+- The console asleep: the first line (`x`) vanished, taken by the UART wake; the next commands answered, and the board stayed awake a minute.
+- Time across sleeps: uptime moved 245 s while the Mac's clock moved 240-244 s over four mostly-asleep minutes; the node's clock read 22:23 then 22:27. esp-hal moves the system timer forward by the time slept, and embassy follows.
+- Not measured yet: the current saved. Not run: the Heltec build (it runs the C++ reference). Afterwards `powersaving off` and the companion back (key 2E97BC45).
+
 ## 2026-11-14 — main loops that sleep (P1, ADR-0012)
 
 - Setup: `mc-m5` with `debug-log`, which now logs every 10 s the main loop's passes and busy time, and keeps the battery voltage every 5 minutes in RAM (printed every minute, for runs on battery). On USB, screen idle on Home, GPS on (indoors, no fix), a phone connected now and then.

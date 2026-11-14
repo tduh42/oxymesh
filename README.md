@@ -73,7 +73,8 @@ The reference is the original MeshCore v1.18 companion firmware on the same M5.
 - **The repeater and the room server** are ports of the C++ servers ([`docs/spec/server.md`](docs/spec/server.md)):
   - logins, requests (status, telemetry, access list, neighbours), the whole console (on USB and over the air), regions, neighbours and discovery, flood and hop limits, posts pushed until acknowledged;
   - a C++ server's settings, access list and regions are imported at first boot.
-  - They have no packet log, power saving, OTA update or bridge.
+  - The repeater light-sleeps with `powersaving on`, like the C++ on ESP32; a button or the console also wakes it for a minute.
+  - They have no packet log, OTA update or bridge.
 - **The hardware** is used as the C++ uses it: the clock chip (PCF8563, in UTC) and the GPS (the L76K of board v1.0). The buzzer plays the same tunes.
 
 ### New on the device

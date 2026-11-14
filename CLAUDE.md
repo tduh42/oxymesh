@@ -91,7 +91,7 @@ Each milestone is committed once finished and tested. Done: MC0–MC7 (plus U0�
 7. **MC7** — new e-paper interface.
 8. **MC8** — 24 h endurance run on the network, and measurements (`docs/measurements.md`).
 
-Server roles (`mc-server`): the repeater (S1) and the room server (S2), on the M5 and the Heltec V4. Later: nRF52 (ThinkNode M1, T-Echo), light sleep.
+Server roles (`mc-server`): the repeater (S1) and the room server (S2), on the M5 and the Heltec V4. Main loops sleep until something happens (P1, ADR-0012); repeaters light-sleep with `powersaving on` (P2). Later: nRF52 (ThinkNode M1, T-Echo).
 
 ## 6. Do not
 

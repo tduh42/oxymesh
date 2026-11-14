@@ -348,6 +348,11 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         t
     }
 
+    /// DIO1, to wake the chip from light sleep.
+    pub fn irq_pin(&mut self) -> &mut esp_hal::gpio::Input<'d> {
+        self.sx.irq_pin()
+    }
+
     /// Until the radio raises an interrupt.
     pub async fn wait_irq(&mut self) {
         self.sx.wait_dio1().await;

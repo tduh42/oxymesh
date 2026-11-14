@@ -244,7 +244,7 @@ The room server has `room.post` and refuses `set repeat on` (§3); it has no `di
 | `sensor get/set/list` | the `gps` setting on boards with a GPS (`gps_interval` can be set too): `> 1`, `null`, `ok`, `can't find custom var`, `1 vars\ngps=1`, `no custom var` |
 | `region …` | §4.5 |
 | `gps`, `gps on/off/sync/diag/setloc`, `gps advert [none/share/prefs]` | boards with a GPS only (the M5) |
-| `powersaving [on/off]` | `Board not supported` for `on` (§4.6); `off`; `on`/`off` |
+| `powersaving [on/off]` | `on - After 2 minutes` (the ESP32 boards, §4.7); `off`; `on`/`off` |
 | `stats-core`, `stats-radio`, `stats-packets` (serial) | the C++'s JSON (`StatsFormatHelper.h`) |
 
 ### 4.4 `get` and `set`
@@ -292,11 +292,24 @@ Hex output is uppercase, as `Utils::toHex` writes it.
 ### 4.6 Where the console differs from the C++
 
 - There is no packet log: `log start`, `log stop`, `log erase` and `log` answer `Error: unsupported`.
-- There is no power saving: `powersaving on` answers `Board not supported`. The C++ gives this answer on boards without power saving.
 - There is no OTA update. `start ota` answers `Error`, as the C++ does on boards without OTA.
 - There are no bridges and no ADC multiplier.
 - After `region load`, the default scope used for adverts follows the new table at once. The C++ keeps the key it had computed until `region default` or a restart.
 - `stats-packets` "recv" and "sent" are the node's counters (§2.11).
+
+### 4.7 Power saving (`powersaving on`)
+
+Like the C++ repeater on ESP32 (`examples/simple_repeater/main.cpp` `loop`, `ESP32Board::sleep`, `CommonCLI.cpp` `powersaving`):
+
+- Off by default. `powersaving on` answers `on - After 2 minutes` and is saved (flags bit 1).
+- With it on, the board light-sleeps from 2 minutes after boot (`POWERSAVING_FIRSTSLEEP_SECS`), when nothing waits to be sent (`hasPendingWork`: the outbound queue, including frames delayed on purpose) and nothing is being transmitted.
+- A sleep lasts at most 30 s (`board.sleep(30)`), less if the server has a job sooner (adverts, saves), the battery reading (10 s) or, on the M5, the page (30 s). DIO1 high, a packet received, ends it; a packet already waiting skips it.
+- oxymesh adds two things:
+  - A button press or the console wakes the board and keeps it awake for a minute, so it can be used. The C++ loses what is typed while asleep and sleeps again at once, so its console is only reachable over the air.
+  - The Heltec V4 also stays awake while its screen is lit (a minute after the button).
+  - On the M5, typing on the console wakes it; the first characters are lost (the UART counts edges to wake). On the Heltec V4 the chip's own USB sleeps too: the computer sees the console come and go.
+- Room servers keep the setting, answer the same, and never sleep, like the C++ (`examples/simple_room_server/main.cpp` never calls `board.sleep`).
+- Companions never sleep this way: Bluetooth needs the chip awake (as in the C++).
 
 ## 5. Storage and import
 

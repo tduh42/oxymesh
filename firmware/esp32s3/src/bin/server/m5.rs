@@ -49,6 +49,7 @@ use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::radio::{Chip, NoFrontEnd, Radio, Tx, lora_of};
 use oxymesh_esp32s3::run::server::Console;
+use oxymesh_esp32s3::run::sleep::{self, Saver};
 use oxymesh_esp32s3::run::{Deadline, boot, mc_now, server};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
@@ -199,6 +200,8 @@ pub async fn run(role: Role) -> ! {
     rpt.board.manufacturer = MANUFACTURER;
     rpt.board.build_date = BUILD_DATE;
     rpt.board.reset_reason = "Not available";
+    // Light sleep (`powersaving on`, P2).
+    rpt.board.powersaving = true;
     rpt.board.shutdown_reason = "Not available";
 
     // Radio.
@@ -272,6 +275,10 @@ pub async fn run(role: Role) -> ! {
         .with_tx(p.GPIO43)
         .with_rx(p.GPIO44)
         .into_async();
+    // Typing on the console wakes it from light sleep (the first characters are lost).
+    let _ = wire.enable_wakeup(&esp_hal::uart::WakeupConfig::default());
+    let mut low = LowPower::new(lpwr);
+    let mut saver = Saver::new();
     let mut console = Console::new(role);
     rpt.start(node, mc_now());
     console.banner(&mut wire, node);
@@ -430,7 +437,7 @@ pub async fn run(role: Role) -> ! {
             }
             btn_b.listen(PinEvent::LowLevel);
             let _ = btn_b.apply_wakeup_config(&WakeupConfig::default().with_low_power_path(true));
-            LowPower::new(lpwr).sleep_deep(RtcSleepConfig::deep());
+            low.sleep_deep(RtcSleepConfig::deep());
         }
 
         // The page, at most every 30 s unless a button was pressed.
@@ -496,7 +503,35 @@ pub async fn run(role: Role) -> ! {
             due.at_ms(now_ms + 50);
         }
         let deadline = due.get();
-        if deadline <= Instant::now() {
+        // Power saving (P2): light sleep when nothing is going on, until the server's next
+        // job, the battery, the page, at most 30 s.
+        let pending = node.next_wakeup().is_some() || radio.transmitting() || epd.busy();
+        // Only the repeater sleeps: the C++ room server keeps the setting and never does
+        // (`simple_room_server/main.cpp` has no `board.sleep`).
+        if role == Role::Repeater
+            && saver.may_sleep(rpt.prefs.powersaving, pending, now_ms)
+            && now_ms >= buttons_settle
+            && btn_a.is_high()
+            && btn_b.is_high()
+        {
+            let mut until = Deadline::within(sleep::SLEEP_MAX);
+            until.at_mc(rpt.next_wakeup());
+            until.at(next_battery);
+            until.at_ms(next_draw);
+            let person = saver.sleep(
+                &mut low,
+                until.get(),
+                radio.irq_pin(),
+                &mut [
+                    (&mut btn_a, PinEvent::LowLevel),
+                    (&mut btn_b, PinEvent::LowLevel),
+                ],
+            );
+            if person {
+                saver.used(Instant::now().as_millis());
+                buttons_settle = Instant::now().as_millis() + 60;
+            }
+        } else if deadline <= Instant::now() {
             embassy_futures::yield_now().await;
         } else {
             let woke = select4(
@@ -506,8 +541,13 @@ pub async fn run(role: Role) -> ! {
                 console.wait_input(&mut wire),
             )
             .await;
-            if matches!(woke, Either4::Third(_)) {
-                buttons_settle = Instant::now().as_millis() + 60;
+            match woke {
+                Either4::Third(_) => {
+                    buttons_settle = Instant::now().as_millis() + 60;
+                    saver.used(Instant::now().as_millis());
+                }
+                Either4::Fourth(()) => saver.used(Instant::now().as_millis()),
+                _ => {}
             }
         }
     }
