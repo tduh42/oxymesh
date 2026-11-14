@@ -139,6 +139,7 @@ impl Screen for Discover {
         Footer {
             a_click: Some("next"),
             a_hold: Some("search"),
+            a_double: None,
             b_click: Some("back"),
             b_hold: None,
         }
@@ -435,6 +436,7 @@ impl Screen for Neighbours {
         Footer {
             a_click: Some("next"),
             a_hold: None,
+            a_double: None,
             b_click: Some("back"),
             b_hold: None,
         }

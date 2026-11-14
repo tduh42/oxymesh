@@ -45,6 +45,11 @@ pub enum Overlay {
         at: PixelRect,
         points: alloc::vec::Vec<(String, i16, i16)>,
     },
+    /// A pixel scene (`crate::scene`), its top-left corner at the rectangle's.
+    Scene {
+        at: PixelRect,
+        scene: crate::scene::Scene,
+    },
 }
 
 impl Overlay {
@@ -53,7 +58,8 @@ impl Overlay {
             Overlay::Clock { at, .. }
             | Overlay::Pin { at, .. }
             | Overlay::Qr { at, .. }
-            | Overlay::Map { at, .. } => *at,
+            | Overlay::Map { at, .. }
+            | Overlay::Scene { at, .. } => *at,
         }
     }
 }
@@ -71,6 +77,7 @@ pub fn draw<D: DrawTarget<Color = BinaryColor>>(o: &Overlay, d: &mut D) -> Resul
         Overlay::Pin { pin, .. } => pin_digits(at, *pin, d),
         Overlay::Qr { text, .. } => qr(at, text, d),
         Overlay::Map { points, .. } => map(at, points, d),
+        Overlay::Scene { scene, .. } => crate::scene::draw(scene, Point::new(at.x, at.y), d),
     }
 }
 

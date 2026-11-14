@@ -2,6 +2,7 @@
 //! app commands, offline message queue, notifications, contact iteration, server requests.
 //! The node (`Node`) handles the network; `Device` talks to the app.
 
+mod app_sent;
 mod console;
 mod screen;
 mod settings;
@@ -197,6 +198,8 @@ pub struct Device {
     packets: PacketLog,
     minutes: Minutes,
     outbox: heapless::Vec<screen::Outgoing, OUTBOX>,
+    /// Messages from the app, followed for the device's history.
+    app_sent: heapless::Vec<app_sent::AppSent, { app_sent::APP_SENT }>,
     ui_reqs: heapless::Vec<screen::Pending, REQUESTS>,
     replies: heapless::Deque<Reply, REQUESTS>,
     discover: Option<(u32, Instant)>,
@@ -302,6 +305,7 @@ impl Device {
             packets: PacketLog::new(),
             minutes: Minutes::new(),
             outbox: heapless::Vec::new(),
+            app_sent: heapless::Vec::new(),
             ui_reqs: heapless::Vec::new(),
             replies: heapless::Deque::new(),
             discover: None,
@@ -342,6 +346,7 @@ impl Device {
     pub fn tick(&mut self, now: Instant, rng: &mut impl Rng, st: &mut impl Storage) {
         self.pump(now, rng, st);
         self.screen_tick(now, st);
+        self.app_sent_tick(now, st);
         self.pump(now, rng, st);
         let s = self.node.disp.stats;
         self.minutes
@@ -905,6 +910,7 @@ impl Device {
             Event::SendConfirmed { ack, rtt_ms } => {
                 // A message from the screen: the app never sent it.
                 if !self.confirm_outgoing(now, u32::from_le_bytes(*ack), st) {
+                    self.app_sent_confirmed(u32::from_le_bytes(*ack), *rtt_ms, st);
                     self.push(&Response::SendConfirmed {
                         ack: *ack,
                         rtt_ms: *rtt_ms,
@@ -1277,7 +1283,12 @@ impl Device {
                     .node
                     .send_text(now, &prefix, txt_type, attempt, timestamp, text)
                 {
-                    Ok(s) => self.sent(s),
+                    Ok(s) => {
+                        if txt_type == 0 {
+                            self.app_sent_text(now, &prefix, attempt, timestamp, text, &s, st);
+                        }
+                        self.sent(s)
+                    }
                     Err(e) => self.err(err_of(e)),
                 }
             }
@@ -1297,7 +1308,10 @@ impl Device {
                     .node
                     .send_channel_text(now, idx, timestamp, name_str(text))
                 {
-                    Ok(()) => self.ok(),
+                    Ok(()) => {
+                        self.app_sent_channel(now, idx, timestamp, name_str(text), st);
+                        self.ok()
+                    }
                     Err(_) => self.err(err::NOT_FOUND),
                 }
             }

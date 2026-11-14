@@ -4,7 +4,8 @@ Source of truth for `mc-ui`. On-screen text **in English**. 200×200 black and w
 
 ## 1. Principles
 
-- **Built on Ratatui** (`ratatui-core` + `ratatui-widgets`), drawn by `mousefood` into the panel frame (ADR-0008). Text is a grid of monospace cells; big digits and QR codes are pixel overlays drawn after the grid.
+- **Built on Ratatui** (`ratatui-core` + `ratatui-widgets`), drawn by `mousefood` into the panel frame (ADR-0008). Text is a grid of monospace cells.
+- **The main screens are drawn in pixels on the panel** (ADR-0011): the header and footer of every screen, and the body of Home, the message list, conversations, compose, the new-message banner and the contact card. A screen returns a scene (`mc_ui::scene`): text in Helvetica, icons from Open Iconic, rounded boxes, circles, lines, a dither. The scene is painted over the grid. The grid version stays, and it is what the terminal emulator and the text snapshots show. Big digits, QR codes and the map are pixel overlays too.
 - **The same code runs everywhere**: on the M5, in the terminal emulator (`mc ui`), and in snapshot tests. Screen logic is separate from drawing, so it is tested without a terminal.
 - **Both buttons mean the same thing on every screen**, and the footer always says what they do right now.
 - **Meaning never rests on style alone**: the selected row is reversed *and* marked; states are words or symbols, not just bold.
@@ -33,14 +34,13 @@ Source of truth for `mc-ui`. On-screen text **in English**. 200×200 black and w
 - Lists wrap: "next" on the last row goes to the first, "previous" on the first goes to the last.
 - **Hold-to-confirm** for dangerous or outgoing actions (factory reset, remove contact, flood advert, region change): a popup asks to hold A for 2 s and shows the time left; releasing early cancels.
 - The first press while the backlight has timed out only turns it back on (if it was on before).
-- For 8 s after boot, a long press on A opens the recovery screen (settings reset, migration restart).
 
 ## 4. Screen layout
 
-- **Header** (row 0, reversed): the screen's title on the left (bold); on the right, in order: unread (`●3`), backlight (`☀` while on), `BT` while a phone is connected, time `HH:MM` (not on Home, which has the big clock), battery `87%` (`87%+` while charging).
+- **Header** (row 0, reversed): the screen's title on the left (bold); on the right, in order: unread (`●3`), backlight (`☀` while on), `BT` while a phone is connected, time `HH:MM` (not on Home, which has the big clock), battery `87%` (`87%+` while charging). On the panel: a black bar, the title in Helvetica bold, then mail icon and count, sun, Bluetooth, time, battery icon (empty under 25 %, a bolt while charging) and percentage.
 - **Body**: rows 1 to the last but one.
-- **Footer** (last row): the current meaning of the buttons, A on the left, B on the right: `A▸next hold▸open  B◂back` (compact grid: ► ◄). On Home, where B only toggles the light: `B☀`. "hold" is a word: the 8×13 font's ⏎ reads as a music note on the panel.
-- **Toasts**: short results ("Sent", "Delivered", "Failed"), shown in place of the footer for 3 s, from the next refresh.
+- **Footer** (last row): the current meaning of the buttons, A on the left, B on the right: `A▸next hold▸open  B◂back` (compact grid: ► ◄). On Home, where B only toggles the light: `B☀`. "hold" is a word: the 8×13 font's ⏎ reads as a music note on the panel. On the panel: a rule, then the buttons as black key caps with their hints, `A next · hold: open`, `B back`; a double click is named where it does something of its own (`2×: up` in a conversation). On the large grid the footer runs down to the panel's edge.
+- **Toasts**: short results, shown in place of the footer for 3 s, from the next refresh: "Sent" when a message leaves; "Delivered 2.4 s" or "Failed" when an outgoing message's status changes (from the screen or the app); "Failed" for any action that failed.
 - **Popups**: centered, framed, modal. B click closes them (cancel).
 - **New message banner**: over the top of the body, sender and the start of the text, for direct messages (channel messages only count as unread). The first A press opens the conversation and is never swallowed; B dismisses it (`B◂later`). No banner for the conversation already on screen.
 
@@ -119,7 +119,8 @@ Home (always-on face)
 
 ## 9. Local history and unread
 
-- The last 200 messages (DMs and channels, received and sent from the screen) are kept in flash, independently of the protocol's offline queue: peer, direction, time, status, text.
+- The last 200 messages (DMs and channels, received, sent from the screen and sent from the app) are kept in flash, independently of the protocol's offline queue: peer, direction, time, status, text.
+- A message from the app (`SEND_TXT_MSG` type 0, `SEND_CHANNEL_TXT_MSG`) is one entry, whatever the number of attempts (same contact and timestamp). Its status follows the attempts; its acknowledgement marks it delivered and still goes to the app. With no acknowledgement for 2 minutes after the last attempt it shows as sent, not failed: only the app knows when it gives up. Channel messages show as sent (nothing acknowledges them).
 - A message becomes read when it is opened on the device **or** when the app fetches it with `SYNC_NEXT_MESSAGE`.
 
 ## 10. E-paper refresh

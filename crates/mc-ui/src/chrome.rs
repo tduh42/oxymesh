@@ -14,6 +14,8 @@ use ratatui_widgets::paragraph::Paragraph;
 
 use crate::app::Ui;
 use crate::clock;
+use crate::panel::COMPACT;
+use crate::scene::{self, Align, Font, Icon, IconSize, Scene};
 use crate::theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +53,8 @@ pub fn areas(a: Rect) -> Areas {
 pub struct Footer {
     pub a_click: Option<&'static str>,
     pub a_hold: Option<&'static str>,
+    /// A double click, when it does something worth naming (scrolling up).
+    pub a_double: Option<&'static str>,
     pub b_click: Option<&'static str>,
     pub b_hold: Option<&'static str>,
 }
@@ -60,6 +64,7 @@ impl Footer {
     pub const LIST: Footer = Footer {
         a_click: Some("next"),
         a_hold: Some("open"),
+        a_double: None,
         b_click: Some("back"),
         b_hold: None,
     };
@@ -67,6 +72,7 @@ impl Footer {
     pub const BACK: Footer = Footer {
         a_click: None,
         a_hold: None,
+        a_double: None,
         b_click: Some("back"),
         b_hold: None,
     };
@@ -190,6 +196,126 @@ pub fn footer(f: &mut Frame<'_>, area: Rect, hints: &Footer, toast: Option<&str>
         Style::new()
     };
     f.render_widget(Paragraph::new(text).style(style), area);
+}
+
+/// Fonts of the pixel chrome: (title, small) by text size.
+fn chrome_fonts(ui: &Ui<'_>) -> (Font, Font) {
+    if ui.grid == COMPACT {
+        (Font::B8, Font::R8)
+    } else {
+        (Font::B10, Font::R8)
+    }
+}
+
+/// The header in pixels (`docs/spec/ui.md` §4): a black bar, the title on the left; on the
+/// right, unread mail and count, the light, Bluetooth when a phone is connected, the time,
+/// the battery.
+pub fn header_scene(w: u16, h: u16, title: &str, time: bool, ui: &Ui<'_>) -> Scene {
+    let c = ui.ctx;
+    let (title_font, _) = chrome_fonts(ui);
+    let mut sc = Scene::new();
+    sc.rect(0, 0, w, h, 0, Some(true), None);
+    let base = (h as i16 + Font::B8.ascent()) / 2;
+    let icon_y = (h as i16 - 8) / 2;
+    let mut x = w as i16 - 2;
+    // From the right edge leftwards: a text, then its icon.
+    let right = |sc: &mut Scene, x: &mut i16, text: Option<&str>, icon: Option<Icon>| {
+        if let Some(t) = text {
+            sc.text(*x, base, Font::B8, Align::Right, false, t);
+            *x -= scene::width(Font::B8, t) + 1;
+        }
+        if let Some(i) = icon {
+            *x -= 8;
+            sc.icon(*x, icon_y, i, IconSize::S8, false);
+            *x -= 4;
+        }
+    };
+    if let Some(p) = c.battery_percent {
+        let icon = if c.charging {
+            Icon::Charging
+        } else if p >= 25 {
+            Icon::BatteryFull
+        } else {
+            Icon::BatteryEmpty
+        };
+        right(&mut sc, &mut x, Some(&format!("{p}%")), Some(icon));
+    } else if c.charging {
+        right(&mut sc, &mut x, None, Some(Icon::Charging));
+    }
+    if time {
+        let t = clock::hhmm(clock::local(c.unix, c.tz_offset_min));
+        right(&mut sc, &mut x, Some(&t), None);
+        x -= 4;
+    }
+    if c.ble.state == crate::app::BleState::Connected {
+        right(&mut sc, &mut x, None, Some(Icon::Bluetooth));
+    }
+    if c.light {
+        right(&mut sc, &mut x, None, Some(Icon::Sun));
+    }
+    let unread = c.dev.unread_alerting();
+    if unread > 0 {
+        right(
+            &mut sc,
+            &mut x,
+            Some(&format!("{unread}")),
+            Some(Icon::Mail),
+        );
+    }
+    let room = x - 4;
+    let t = scene::ellipsize(title_font, title, room);
+    let tb = (h as i16 + title_font.ascent()) / 2;
+    sc.text(3, tb, title_font, Align::Left, false, &t);
+    sc
+}
+
+/// The footer in pixels: the two buttons as key caps with what they do, or a toast as a
+/// black bar. `h` may run past the last row, to the panel's edge.
+pub fn footer_scene(w: u16, h: u16, hints: &Footer, toast: Option<&str>, ui: &Ui<'_>) -> Scene {
+    let (_, small) = chrome_fonts(ui);
+    let mut sc = Scene::new();
+    // Key caps 10 px tall, centred in what is left under the rule (the compact row is 10 px).
+    let top = ((h.min(18) as i16 - 10) / 2).max(1);
+    let cap_h = (h as i16 - top).clamp(6, 10) as u16;
+    let base = top + 8;
+    if let Some(t) = toast {
+        sc.rect(0, 0, w, h, 0, Some(true), None);
+        let t = scene::ellipsize(Font::B8, t, w as i16 - 6);
+        sc.text(w as i16 / 2, base, Font::B8, Align::Center, false, &t);
+        return sc;
+    }
+    sc.hline(0, w as i16 - 1, 0);
+    let cap = |sc: &mut Scene, x: i16, k: &str| {
+        sc.rect(x, top, 11, cap_h, 2, Some(true), None);
+        sc.text(x + 6, base, Font::B8, Align::Center, false, k);
+    };
+    let mut left: Vec<String> = Vec::new();
+    if let Some(a) = hints.a_click {
+        left.push(String::from(a));
+    }
+    if let Some(a) = hints.a_double {
+        left.push(format!("2×: {a}"));
+    }
+    if let Some(a) = hints.a_hold {
+        left.push(format!("hold: {a}"));
+    }
+    let right = match (hints.b_click, hints.b_hold) {
+        (Some(b), _) => String::from(b),
+        (None, Some(b)) => format!("hold: {b}"),
+        (None, None) => String::new(),
+    };
+    let rw = scene::width(small, &right);
+    if !right.is_empty() {
+        sc.text(w as i16 - 2, base, small, Align::Right, true, &right);
+        cap(&mut sc, w as i16 - 2 - rw - 13, "B");
+    }
+    if !left.is_empty() {
+        cap(&mut sc, 1, "A");
+        let room = w as i16 - 14 - if right.is_empty() { 2 } else { rw + 19 };
+        let l = scene::ellipsize(small, &left.join(" · "), room);
+        sc.text(14, base, small, Align::Left, true, &l);
+    }
+    sc
 }
 
 #[cfg(test)]

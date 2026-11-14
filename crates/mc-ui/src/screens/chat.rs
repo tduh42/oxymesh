@@ -229,6 +229,7 @@ impl Screen for Conversation {
         Footer {
             a_click: Some("down"),
             a_hold: Some("write"),
+            a_double: Some("up"),
             b_click: Some("back"),
             b_hold: None,
         }
@@ -495,6 +496,7 @@ impl Screen for Compose {
         Footer {
             a_click: Some("next"),
             a_hold: Some(if done { "done" } else { "add" }),
+            a_double: None,
             b_click: Some(if empty { "cancel" } else { "delete" }),
             b_hold: None,
         }

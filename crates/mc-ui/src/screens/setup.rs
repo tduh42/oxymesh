@@ -121,6 +121,7 @@ impl Screen for SetupRegion {
         Footer {
             a_click: Some("next"),
             a_hold: Some("choose"),
+            a_double: None,
             b_click: Some("skip"),
             b_hold: None,
         }
@@ -180,6 +181,7 @@ impl Screen for SetupTime {
         Footer {
             a_click: None,
             a_hold: Some("finish"),
+            a_double: None,
             b_click: Some("skip"),
             b_hold: None,
         }

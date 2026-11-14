@@ -404,3 +404,96 @@ fn a_new_channel_in_a_freed_slot_starts_clean() {
     assert_eq!(dev.history().with(peer).count(), 0);
     assert_eq!(dev.history().unread(), 1);
 }
+
+/// The newest outgoing entry with `peer` in node `i`'s history.
+fn last_outgoing(w: &World, i: usize, peer: Peer) -> Option<mc_node::history::Msg> {
+    w.nodes[i]
+        .dev
+        .history()
+        .with(peer)
+        .filter(|m| m.outgoing)
+        .last()
+        .cloned()
+}
+
+#[test]
+fn messages_from_the_app_show_on_the_screen_and_their_ack_still_reaches_the_app() {
+    let mut w = bob_writes("first");
+    let prefix: [u8; 6] = key(&w, 1)[..6].try_into().unwrap();
+    let now = w.now;
+    let ts = w.node(0).time(now);
+    // The app sends, then retries with the same timestamp before anything came back.
+    for attempt in 0..2 {
+        w.app(
+            0,
+            &enc(&Command::SendTxtMsg {
+                txt_type: 0,
+                attempt,
+                timestamp: ts,
+                prefix,
+                text: b"from the phone",
+            }),
+        );
+    }
+    let mine: Vec<_> = w.nodes[0]
+        .dev
+        .history()
+        .with(bob(&w))
+        .filter(|m| m.outgoing)
+        .collect();
+    assert_eq!(mine.len(), 1, "one entry for the two attempts");
+    assert_eq!(&mine[0].text[..], b"from the phone");
+    assert_eq!(mine[0].status, Status::Sending { attempt: 1 });
+    assert!(w.run_until(secs(30), |w| matches!(
+        last_outgoing(w, 0, bob(w)).map(|m| m.status),
+        Some(Status::Delivered { .. })
+    )));
+    assert!(
+        pushed(&w, 0, 0x82) >= 1,
+        "SEND_CONFIRMED still goes to the app"
+    );
+}
+
+#[test]
+fn channel_messages_from_the_app_show_as_sent() {
+    let mut w = bob_writes("first");
+    let now = w.now;
+    let ts = w.node(0).time(now);
+    w.app(
+        0,
+        &enc(&Command::SendChannelTxtMsg {
+            txt_type: 0,
+            idx: 0,
+            timestamp: ts,
+            text: b"hello public",
+        }),
+    );
+    let m = last_outgoing(&w, 0, Peer::Channel(0)).expect("recorded");
+    assert_eq!(m.status, Status::Sent);
+    assert_eq!(&m.text[..], b"hello public");
+}
+
+#[test]
+fn an_unanswered_app_message_is_left_as_sent() {
+    let mut w = bob_writes("first");
+    w.unlink(0, 1);
+    let prefix: [u8; 6] = key(&w, 1)[..6].try_into().unwrap();
+    let now = w.now;
+    let ts = w.node(0).time(now);
+    w.app(
+        0,
+        &enc(&Command::SendTxtMsg {
+            txt_type: 0,
+            attempt: 0,
+            timestamp: ts,
+            prefix,
+            text: b"anyone?",
+        }),
+    );
+    w.run(secs(125));
+    assert_eq!(
+        last_outgoing(&w, 0, bob(&w)).map(|m| m.status),
+        Some(Status::Sent),
+        "not failed: only the app knows when it gives up"
+    );
+}

@@ -22,6 +22,8 @@ ratatui-core = { version = "0.1", default-features = false }
 ratatui-widgets = { version = "0.3", default-features = false }
 mousefood = { version = "0.5.3", default-features = false, features = ["fonts", "monochrome"] }
 embedded-graphics = "0.8"
+# Proportional fonts and icons for the pixel scenes (ADR-0011); fonts credited in NOTICE.
+u8g2-fonts = { version = "0.8", default-features = false }
 
 [dev-dependencies]
 mc-proto.workspace = true

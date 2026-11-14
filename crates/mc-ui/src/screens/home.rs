@@ -170,6 +170,7 @@ impl Screen for Home {
         Footer {
             a_click: Some("next"),
             a_hold: Some("open"),
+            a_double: None,
             b_click: None,
             // B only toggles the light here: `B☀`.
             b_hold: Some("☀"),

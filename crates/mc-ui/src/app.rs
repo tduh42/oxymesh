@@ -25,6 +25,7 @@ use crate::input::{Button, Gesture};
 use crate::keyboard::Keyboard;
 use crate::overlay::{Overlay, PixelRect};
 use crate::panel::{COMPACT, Grid};
+use crate::scene::Scene;
 use crate::screens::{self, Home};
 use crate::theme::{self, Symbols};
 
@@ -145,6 +146,11 @@ pub trait Screen: core::fmt::Debug {
     /// Pixel parts of the screen, as cell rectangles inside `body`.
     fn paints(&self, _body: Rect, _ui: &Ui<'_>) -> Vec<(Rect, Paint)> {
         Vec::new()
+    }
+    /// The whole body drawn in pixels on the panel (ADR-0011), `w`×`h`; `draw` stays the
+    /// text version (terminal, snapshots). `None`: the cells and `paints` show.
+    fn scene(&self, _w: u16, _h: u16, _ui: &Ui<'_>) -> Option<Scene> {
+        None
     }
     /// The conversation shown, if any (no banner for it; new messages are read at once).
     fn peer(&self) -> Option<Peer> {
@@ -294,8 +300,13 @@ impl App {
     /// The runner applied `intent`: the screen that asked may react.
     pub fn done(&mut self, intent: &Intent, outcome: &Outcome, ctx: &Ctx<'_>) {
         self.dirty = true;
-        if let Outcome::Failed(_) = outcome {
-            self.toast("Failed", ctx.now_ms);
+        match (intent, outcome) {
+            (_, Outcome::Failed(_)) => self.toast("Failed", ctx.now_ms),
+            // The message left: "Delivered" or "Failed" follows (`ui.md` §4).
+            (Intent::SendText { .. } | Intent::SendChannel { .. }, Outcome::Message(_)) => {
+                self.toast("Sent", ctx.now_ms);
+            }
+            _ => {}
         }
         let ui = make_ui(self.grid, ctx);
         let nav = match self.stack.last_mut() {
@@ -332,8 +343,22 @@ impl App {
     }
 
     /// A notification from the device (`Device::poll_ui`).
-    pub fn event(&mut self, e: &UiEvent, _ctx: &Ctx<'_>) {
+    pub fn event(&mut self, e: &UiEvent, ctx: &Ctx<'_>) {
         self.dirty = true;
+        // A message sent from the device was acknowledged, or given up.
+        if let UiEvent::Status { seq } = *e
+            && let Some(m) = ctx.dev.history().get(seq)
+            && m.outgoing
+        {
+            match m.status {
+                mc_node::history::Status::Delivered { rtt_ms } => {
+                    let t = format!("Delivered {}.{} s", rtt_ms / 1000, rtt_ms % 1000 / 100);
+                    self.toast(&t, ctx.now_ms);
+                }
+                mc_node::history::Status::Failed => self.toast("Failed", ctx.now_ms),
+                _ => {}
+            }
+        }
         if let UiEvent::Message {
             seq,
             peer,
@@ -511,12 +536,29 @@ impl App {
             return;
         };
         let title = top.title(&ui);
-        chrome::header(f, areas.header, &title, top.header_time(), &ui);
+        let header_time = top.header_time();
+        chrome::header(f, areas.header, &title, header_time, &ui);
         top.draw(f, areas.body, &ui);
         self.overlays.clear();
         let covered = self.popup.is_some() || self.banner.is_some();
-        if self.panel && !covered {
-            let (cw, ch) = cell_px(self.grid);
+        let (cw, ch) = cell_px(self.grid);
+        let px = |cells: Rect| PixelRect {
+            x: i32::from(cells.x - area.x) * cw as i32,
+            y: i32::from(cells.y - area.y) * ch as i32,
+            w: u32::from(cells.width) * cw,
+            h: u32::from(cells.height) * ch,
+        };
+        let body_scene = if self.panel && !covered {
+            let at = px(areas.body);
+            top.scene(at.w as u16, at.h as u16, &ui)
+                .map(|scene| (at, scene))
+        } else {
+            None
+        };
+        if let Some((at, scene)) = body_scene {
+            skip(f, areas.body);
+            self.overlays.push(Overlay::Scene { at, scene });
+        } else if self.panel && !covered {
             for (cells, paint) in top.paints(areas.body, &ui) {
                 let cells = cells.intersection(areas.body);
                 for y in cells.top()..cells.bottom() {
@@ -541,6 +583,7 @@ impl App {
             Footer {
                 a_click: None,
                 a_hold: Some("confirm"),
+                a_double: None,
                 b_click: Some("cancel"),
                 b_hold: None,
             }
@@ -548,6 +591,7 @@ impl App {
             Footer {
                 a_click: None,
                 a_hold: Some("open"),
+                a_double: None,
                 b_click: Some("later"),
                 b_hold: None,
             }
@@ -556,6 +600,24 @@ impl App {
         };
         let toast = self.toast.as_ref().map(|(t, _)| t.as_str());
         chrome::footer(f, areas.footer, &hints, toast, &ui);
+        // The header and footer in pixels; the footer runs to the panel's bottom edge.
+        let mut chrome_overlays = Vec::new();
+        if self.panel {
+            let at = px(areas.header);
+            skip(f, areas.header);
+            chrome_overlays.push(Overlay::Scene {
+                at,
+                scene: chrome::header_scene(at.w as u16, at.h as u16, &title, header_time, &ui),
+            });
+            let mut at = px(areas.footer);
+            at.h =
+                at.h.max(crate::panel::HEIGHT.saturating_sub(at.y.max(0) as u32));
+            skip(f, areas.footer);
+            chrome_overlays.push(Overlay::Scene {
+                at,
+                scene: chrome::footer_scene(at.w as u16, at.h as u16, &hints, toast, &ui),
+            });
+        }
         if let Some(p) = &self.popup {
             draw_confirm(f, areas.body, p, &ui);
         } else if let Some(seq) = self.banner {
@@ -583,6 +645,7 @@ impl App {
                 });
             }
         }
+        self.overlays.extend(chrome_overlays);
     }
 
     /// Pixel overlays of the last draw, to paint over the panel frame.
@@ -595,6 +658,16 @@ impl App {
         self.stack.push(s);
         self.screen_changed = true;
         self.dirty = true;
+    }
+}
+
+/// Cells the panel leaves to an overlay.
+fn skip(f: &mut Frame<'_>, cells: Rect) {
+    let cells = cells.intersection(f.area());
+    for y in cells.top()..cells.bottom() {
+        for x in cells.left()..cells.right() {
+            f.buffer_mut()[(x, y)].set_diff_option(CellDiffOption::Skip);
+        }
     }
 }
 

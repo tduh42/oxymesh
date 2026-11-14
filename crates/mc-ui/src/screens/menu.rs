@@ -9,7 +9,7 @@ use ratatui_core::layout::Rect;
 use ratatui_core::terminal::Frame;
 use ratatui_widgets::list::ListState;
 
-use super::{Dest, Soon, draw_list, open, step};
+use super::{Dest, draw_list, open, step};
 use crate::act::Intent;
 use crate::app::{Confirm, Input, Nav, Screen, Ui};
 
@@ -21,8 +21,6 @@ pub enum Action {
     /// Something done at once (a toggle).
     Run(fn(&Ui<'_>) -> Nav),
     Open(Dest),
-    /// Not built yet: a screen that says which milestone brings it.
-    Soon(&'static str),
     Intent(Intent, &'static str),
     /// Hold-to-confirm, then the intent and a toast.
     Confirm {
@@ -117,7 +115,6 @@ impl Screen for Menu {
             Action::Build(f) => Nav::Push(f(ui)),
             Action::Run(f) => f(ui),
             Action::Open(d) => Nav::Push(open(d)),
-            Action::Soon(note) => Nav::Push(Box::new(Soon::new(item.label, note))),
             Action::Intent(i, toast) => Nav::IntentToast(i, toast),
             Action::Confirm {
                 text,

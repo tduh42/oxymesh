@@ -22,6 +22,7 @@ pub mod overlay;
 pub mod panel;
 pub mod refresh;
 pub mod regions;
+pub mod scene;
 pub mod screens;
 pub mod server;
 pub mod status;

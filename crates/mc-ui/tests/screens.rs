@@ -213,13 +213,16 @@ fn overlays_never_go_stale_on_the_panel() {
         {
             let mut t = Terminal::new(panel::backend(&mut frame, grid)).unwrap();
             t.draw(|f| app.draw(f, &c)).unwrap();
-            assert_eq!(app.overlays().len(), 1, "the clock");
+            assert_eq!(body_overlays(&app).len(), 1, "the clock");
             for o in app.overlays() {
                 overlay::draw(o, t.backend_mut().display_mut()).unwrap();
             }
             press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
             t.draw(|f| app.draw(f, &c)).unwrap();
-            assert!(app.overlays().is_empty());
+            assert!(body_overlays(&app).is_empty());
+            for o in app.overlays() {
+                overlay::draw(o, t.backend_mut().display_mut()).unwrap();
+            }
         }
         let mut fresh = Frame::new();
         {
@@ -227,6 +230,9 @@ fn overlays_never_go_stale_on_the_panel() {
             press(&mut app2, &c, &[Click(A), Click(A), Click(A), Long(A)]);
             let mut t = Terminal::new(panel::backend(&mut fresh, grid)).unwrap();
             t.draw(|f| app2.draw(f, &c)).unwrap();
+            for o in app2.overlays() {
+                overlay::draw(o, t.backend_mut().display_mut()).unwrap();
+            }
         }
         assert!(frame == fresh, "{grid:?}: stale pixels after leaving Home");
     }
@@ -283,7 +289,10 @@ fn pairing_covers_the_screen_with_the_pin() {
         let mut term = Terminal::new(panel::backend(&mut frame, grid)).unwrap();
         term.draw(|f| app.draw(f, &c)).unwrap();
         assert!(
-            matches!(app.overlays(), [overlay::Overlay::Pin { pin: 48_213, .. }]),
+            matches!(
+                body_overlays(&app).as_slice(),
+                [overlay::Overlay::Pin { pin: 48_213, .. }]
+            ),
             "{:?}",
             app.overlays()
         );
@@ -425,4 +434,14 @@ fn import_from_cpp_shows_what_it_brings_then_needs_a_hold() {
     insta::assert_snapshot!("import_nothing_large", text(&mut app, LARGE, &c));
     assert!(press(&mut app, &c, &[Long(A)]).is_empty());
     assert!(app.popup().is_none());
+}
+
+/// The overlays other than the header and footer (drawn on every panel frame).
+fn body_overlays(app: &App) -> Vec<overlay::Overlay> {
+    let n = app.overlays().len();
+    app.overlays()
+        .iter()
+        .take(n.saturating_sub(2))
+        .cloned()
+        .collect()
 }

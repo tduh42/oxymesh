@@ -356,6 +356,7 @@ impl Screen for RangeTest {
         Footer {
             a_click: None,
             a_hold: Some(if self.running { "pause" } else { "start" }),
+            a_double: None,
             b_click: Some("back"),
             b_hold: None,
         }
@@ -501,6 +502,7 @@ impl Screen for Trace {
         Footer {
             a_click: None,
             a_hold: Some("trace"),
+            a_double: None,
             b_click: Some("back"),
             b_hold: None,
         }
@@ -651,6 +653,7 @@ impl Screen for Packets {
         Footer {
             a_click: Some("next"),
             a_hold: None,
+            a_double: None,
             b_click: Some("back"),
             b_hold: None,
         }
@@ -950,12 +953,26 @@ impl Screen for Map {
             let e = (p.1 - me.1) as f32 / 1e6 * 111_320.0 * cos / span * 1000.0;
             (e.abs() <= 1000.0 && n.abs() <= 1000.0).then_some((e as i16, n as i16))
         };
+        // The same nodes as the text version and its count: contacts, then nodes heard with
+        // a position that no contact has.
+        let mut seen: Vec<(i32, i32)> = Vec::new();
         let mut pts: Vec<(String, i16, i16)> = Vec::new();
         for c in &ui.ctx.dev.node.contacts.list {
-            if let Some(p) = position_of(c)
-                && let Some((e, n)) = scale(p)
+            if let Some(p) = position_of(c) {
+                seen.push(p);
+                if let Some((e, n)) = scale(p) {
+                    pts.push((name_of(&c.name).chars().take(10).collect(), e, n));
+                }
+            }
+        }
+        for h in ui.ctx.dev.heard().sorted() {
+            if let Some(p) = h.location
+                && !seen.contains(&p)
             {
-                pts.push((name_of(&c.name).chars().take(10).collect(), e, n));
+                seen.push(p);
+                if let Some((e, n)) = scale(p) {
+                    pts.push((heard_name(ui, h).chars().take(10).collect(), e, n));
+                }
             }
         }
         alloc::vec![(
@@ -977,6 +994,7 @@ impl Screen for Map {
         Footer {
             a_click: Some("out"),
             a_hold: Some("reset"),
+            a_double: None,
             b_click: Some("back"),
             b_hold: None,
         }

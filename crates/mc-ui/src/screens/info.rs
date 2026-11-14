@@ -1,4 +1,5 @@
-//! Screens that show information: placeholders, Messages (empty until U2), About, My card.
+//! Screens that show information: About, the QR cards, and a fallback for a settings page that
+//! cannot open.
 
 use alloc::format;
 use alloc::string::String;
@@ -16,7 +17,7 @@ use crate::act::{Intent, Outcome};
 use crate::app::{Confirm, Input, Nav, Paint, Screen, Ui};
 use crate::chrome::{self, Footer};
 
-/// A feature not built yet: says which milestone brings it.
+/// A settings page that could not open: its title and a note.
 #[derive(Debug)]
 pub struct Soon {
     title: String,
@@ -302,6 +303,7 @@ impl Screen for ImportCpp {
             Some(Ok(_)) => Footer {
                 a_click: None,
                 a_hold: Some("import"),
+                a_double: None,
                 b_click: Some("back"),
                 b_hold: None,
             },

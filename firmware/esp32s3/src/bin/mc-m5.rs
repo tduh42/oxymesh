@@ -663,6 +663,16 @@ async fn main(_spawner: Spawner) -> ! {
             let console = power_off.then_some(Intent::Hibernate);
             for i in app.take_intents().into_iter().chain(console) {
                 let mut o = perform(&i, dev, mc_now(), &mut rng, &mut store);
+                // Something went out: the next screen change cleans the panel (`ui.md` §10).
+                if matches!(
+                    i,
+                    Intent::SendText { .. }
+                        | Intent::SendChannel { .. }
+                        | Intent::SendAdvert { .. }
+                ) && !matches!(o, Outcome::Failed(_))
+                {
+                    policy.sent();
+                }
                 if o == Outcome::CppFind {
                     o = Outcome::Cpp(match cpp_fs() {
                         Some(mut fs) => cpp::summary(&mut fs),
