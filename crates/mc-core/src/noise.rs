@@ -39,6 +39,11 @@ impl NoiseFloor {
         self.floor
     }
 
+    /// A round is still taking samples.
+    pub fn sampling(&self) -> bool {
+        self.n < SAMPLES
+    }
+
     /// After an AGC reset (`RadioLibWrapper::resetAGC`): back to 0, sampling again from scratch, so
     /// a floor stuck low cannot keep rejecting normal samples.
     pub fn reset(&mut self) {

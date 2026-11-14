@@ -10,6 +10,7 @@
 //! next page, double click = previous, long press = act.
 use core::cell::RefCell;
 
+use embassy_futures::select::{Either4, select4};
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
@@ -36,7 +37,7 @@ use oxymesh_esp32s3::battery::{Smoother, percent};
 use oxymesh_esp32s3::heltec_v4::{self as board, Fem, UsbWire};
 use oxymesh_esp32s3::run::radio::{Chip, Radio, Tx, lora_of};
 use oxymesh_esp32s3::run::server::Console;
-use oxymesh_esp32s3::run::{boot, mc_now, server};
+use oxymesh_esp32s3::run::{Deadline, boot, mc_now, server};
 use oxymesh_esp32s3::ssd1306::Ssd1306;
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -174,7 +175,7 @@ pub async fn run(role: Role) -> ! {
     let chip_temp = ChipTemp::new();
 
     let mut wire = UsbWire {
-        usb: UsbSerialJtag::new(p.USB_DEVICE),
+        usb: UsbSerialJtag::new(p.USB_DEVICE).into_async(),
     };
     let mut console = Console::new(role);
     rpt.start(node, mc_now());
@@ -189,6 +190,8 @@ pub async fn run(role: Role) -> ! {
     let mut next_ui_tick = 0u64;
     let mut next_battery = Instant::now();
     let mut battery_percent = None;
+    // Until then, the button is sampled every 10 ms after an edge (debounce).
+    let mut button_settle = 0u64;
     loop {
         let now = mc_now();
         console.poll(&mut wire, &mut rpt, node, now, &mut rng);
@@ -304,6 +307,39 @@ pub async fn run(role: Role) -> ! {
                 }
             }
         }
-        Timer::after(Duration::from_millis(1)).await;
+
+        // Sleep until something is due or happens (P1): the radio, the button, the console,
+        // or the earliest deadline (at most a second).
+        let now_ms = Instant::now().as_millis();
+        let mut due = Deadline::within(Duration::from_secs(1));
+        due.at_mc(node.next_wakeup());
+        due.at_mc(rpt.next_wakeup());
+        due.at(radio.next_deadline());
+        due.at(next_battery);
+        if screen_on {
+            due.at_ms(next_ui_tick);
+            due.at_ms(screen_until);
+        }
+        if let Some(t) = gestures.next_deadline() {
+            due.at_ms(t);
+        }
+        if now_ms < button_settle || button.is_low() != gestures.down(Button::A) {
+            due.at_ms(now_ms + 10);
+        }
+        let deadline = due.get();
+        if deadline <= Instant::now() {
+            embassy_futures::yield_now().await;
+        } else {
+            let woke = select4(
+                Timer::at(deadline),
+                radio.wait_irq(),
+                button.wait_for_any_edge(),
+                console.wait_input(&mut wire),
+            )
+            .await;
+            if matches!(woke, Either4::Third(_)) {
+                button_settle = Instant::now().as_millis() + 60;
+            }
+        }
     }
 }

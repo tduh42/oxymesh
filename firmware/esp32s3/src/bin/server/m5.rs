@@ -12,6 +12,7 @@
 use core::cell::RefCell;
 use core::fmt::Write;
 
+use embassy_futures::select::{Either4, select, select4};
 use embassy_time::{Duration, Instant, Timer};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::iso_8859_1::FONT_10X20;
@@ -48,7 +49,7 @@ use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::radio::{Chip, NoFrontEnd, Radio, Tx, lora_of};
 use oxymesh_esp32s3::run::server::Console;
-use oxymesh_esp32s3::run::{boot, mc_now, server};
+use oxymesh_esp32s3::run::{Deadline, boot, mc_now, server};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -254,7 +255,7 @@ pub async fn run(role: Role) -> ! {
         let _ = io.set(pin::PERIPH_POWER, true);
     }
     let pull_up = InputConfig::default().with_pull(Pull::Up);
-    let btn_a = Input::new(p.GPIO21, pull_up);
+    let mut btn_a = Input::new(p.GPIO21, pull_up);
     let mut btn_b = Input::new(p.GPIO14, pull_up);
     let usb_in = Input::new(p.GPIO12, InputConfig::default());
     let mut adc_cfg = AdcConfig::new();
@@ -269,7 +270,8 @@ pub async fn run(role: Role) -> ! {
     let mut wire = Uart::new(p.UART0, UartConfig::default())
         .expect("UART0")
         .with_tx(p.GPIO43)
-        .with_rx(p.GPIO44);
+        .with_rx(p.GPIO44)
+        .into_async();
     let mut console = Console::new(role);
     rpt.start(node, mc_now());
     console.banner(&mut wire, node);
@@ -281,6 +283,8 @@ pub async fn run(role: Role) -> ! {
     let mut next_draw = 0u64;
     let mut next_battery = Instant::now();
     let mut battery_percent = None;
+    // Until then, the buttons are sampled every 10 ms after an edge (debounce).
+    let mut buttons_settle = 0u64;
     loop {
         let now = mc_now();
         console.poll(&mut wire, &mut rpt, node, now, &mut rng);
@@ -465,6 +469,46 @@ pub async fn run(role: Role) -> ! {
                 let _ = epd.show_full(cur);
             }
         }
-        Timer::after(Duration::from_millis(1)).await;
+
+        // Sleep until something is due or happens (P1): the radio, a button, the console, or
+        // the earliest deadline (at most a second).
+        let now_ms = Instant::now().as_millis();
+        let mut due = Deadline::within(Duration::from_secs(1));
+        due.at_mc(node.next_wakeup());
+        due.at_mc(rpt.next_wakeup());
+        due.at(radio.next_deadline());
+        due.at(next_battery);
+        due.at_ms(next_draw);
+        if let Some(t) = gestures.next_deadline() {
+            due.at_ms(t);
+        }
+        if now_ms < buttons_settle
+            || btn_a.is_low() != gestures.down(Button::A)
+            || btn_b.is_low() != gestures.down(Button::B)
+        {
+            due.at_ms(now_ms + 10);
+        }
+        if epd.busy() {
+            due.at_ms(now_ms + 20);
+        }
+        if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
+            // UART1 at 9600 baud: its 128-byte FIFO fills in about 130 ms.
+            due.at_ms(now_ms + 50);
+        }
+        let deadline = due.get();
+        if deadline <= Instant::now() {
+            embassy_futures::yield_now().await;
+        } else {
+            let woke = select4(
+                Timer::at(deadline),
+                radio.wait_irq(),
+                select(btn_a.wait_for_any_edge(), btn_b.wait_for_any_edge()),
+                console.wait_input(&mut wire),
+            )
+            .await;
+            if matches!(woke, Either4::Third(_)) {
+                buttons_settle = Instant::now().as_millis() + 60;
+            }
+        }
     }
 }

@@ -2,6 +2,22 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-14 — main loops that sleep (P1, ADR-0012)
+
+- Setup: `mc-m5` with `debug-log`, which now logs every 10 s the main loop's passes and busy time, and keeps the battery voltage every 5 minutes in RAM (printed every minute, for runs on battery). On USB, screen idle on Home, GPS on (indoors, no fix), a phone connected now and then.
+
+| M5 companion | Passes per 10 s | Busy |
+|---|---|---|
+| Polling every 1 ms (before) | 6,500-6,600 | 22-24 % (29 % with the noise burst) |
+| Sleeping until something happens | 203-205 | 2.0-3.4 % |
+
+- What a pass cost when polled (µs): radio 81, core tick 58, interface bookkeeping 50, GPS 31-45, buttons and events 35-39, Bluetooth and actions 31, drawing check 7-15, USB link 9. Nothing to optimise one by one: the cost was paying it 650 times a second.
+- With the GPS off, the M5 companion's ceiling is its 250 ms interface tick: about 4 passes a second.
+- USB round trips unchanged (`mc latency`: 10 / 13 / 15 ms).
+- Radio: 12 minutes of evening listening heard nothing, with the new loop and with the old one (a quiet network, not the loop). Then three zero-hop adverts from the C++ Heltec all reached the M5, and two from the M5 reached the Heltec. `rpt-m5`: its console answers at once, it received two adverts from the Heltec; the M5 was given its companion back (key 2E97BC45).
+- Not run on hardware: the Heltec builds (the Heltec runs the C++ reference).
+- `mc stats`, `mc info` and the other commands that open the M5's port reset it (the CH340's control lines); `mc log` does not.
+
 ## 2026-11-14 — pixel screens on the M5 (U10), clock chip
 
 - Setup: `mc-m5` with `debug-log`, which now logs each frame's draw time, overlay paint time and heap. Read with `mc log`, the screens moved by hand.

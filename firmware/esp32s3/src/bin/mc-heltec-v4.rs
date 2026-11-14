@@ -15,6 +15,7 @@ extern crate alloc;
 use core::cell::RefCell;
 
 use embassy_executor::Spawner;
+use embassy_futures::select::{Either4, select, select4};
 use embassy_time::{Duration, Instant, Timer};
 use esp_backtrace as _;
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
@@ -43,7 +44,7 @@ use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::heltec_v4::{self as board, Fem, UsbWire};
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, Radio, Tx};
-use oxymesh_esp32s3::run::{self, boot, mc_now};
+use oxymesh_esp32s3::run::{self, Deadline, boot, mc_now};
 use oxymesh_esp32s3::ssd1306::Ssd1306;
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -218,7 +219,7 @@ async fn main(_spawner: Spawner) -> ! {
     let chip_temp = ChipTemp::new();
 
     let mut link = AppLink::new(UsbWire {
-        usb: UsbSerialJtag::new(p.USB_DEVICE),
+        usb: UsbSerialJtag::new(p.USB_DEVICE).into_async(),
     });
 
     let frame = OLED.init(Oled::new());
@@ -233,6 +234,8 @@ async fn main(_spawner: Spawner) -> ! {
         let mut next_battery = Instant::now();
         let mut next_blink = 0u64;
         let mut blink_off: Option<u64> = None;
+        // Until then, the button is sampled every 10 ms after an edge (debounce).
+        let mut button_settle = 0u64;
         loop {
             let now = mc_now();
             link.poll(dev, ble_sh, now, &mut rng, &mut store);
@@ -383,7 +386,45 @@ async fn main(_spawner: Spawner) -> ! {
                     led.set_low();
                 }
             }
-            Timer::after(Duration::from_millis(1)).await;
+
+            // Sleep until something is due or happens (P1): the radio, the button, the
+            // computer, Bluetooth, or the earliest deadline.
+            let now_ms = Instant::now().as_millis();
+            let mut due = Deadline::within(Duration::from_secs(1));
+            due.at_mc(dev.next_wakeup());
+            due.at(radio.next_deadline());
+            due.at(next_battery);
+            if screen_on {
+                due.at_ms(next_ui_tick);
+                due.at_ms(screen_until);
+            }
+            if let Some(t) = gestures.next_deadline() {
+                due.at_ms(t);
+            }
+            if now_ms < button_settle || button.is_low() != gestures.down(Button::A) {
+                due.at_ms(now_ms + 10);
+            }
+            if dev.node.prefs.ui.led_unread && dev.unread_alerting() > 0 {
+                due.at_ms(next_blink);
+            }
+            if let Some(t) = blink_off {
+                due.at_ms(t);
+            }
+            let deadline = due.get();
+            if deadline <= Instant::now() {
+                embassy_futures::yield_now().await;
+            } else {
+                let woke = select4(
+                    Timer::at(deadline),
+                    radio.wait_irq(),
+                    button.wait_for_any_edge(),
+                    select(link.wait_input(), ble_sh.wake.wait()),
+                )
+                .await;
+                if matches!(woke, Either4::Third(_)) {
+                    button_settle = Instant::now().as_millis() + 60;
+                }
+            }
         }
     };
 

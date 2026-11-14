@@ -74,6 +74,8 @@ pub struct Shared {
     pub new_bonds: RefCell<heapless::Deque<BondInformation, 2>>,
     /// End the current connection (paired phones forgotten).
     pub hang_up: Signal<NoopRawMutex, ()>,
+    /// Something for the main loop (a frame, a state, a bond): it wakes.
+    pub wake: Signal<NoopRawMutex, ()>,
 }
 
 impl Shared {
@@ -86,6 +88,7 @@ impl Shared {
             control: Channel::new(),
             outbound: Signal::new(),
             new_bonds: RefCell::new(heapless::Deque::new()),
+            wake: Signal::new(),
             hang_up: Signal::new(),
         }
     }
@@ -137,6 +140,7 @@ pub async fn control<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, sh: 
                     let _ = stack.remove_bond_information(id);
                 }
                 sh.paired.set(0);
+                sh.wake.signal(());
                 sh.hang_up.signal(());
             }
         }
@@ -154,6 +158,7 @@ pub async fn serve<'v, C: Controller>(
 {
     loop {
         sh.state.set(BleState::Advertising);
+        sh.wake.signal(());
         let conn = advertise(name, peripheral, server).await;
         if let Err(e) = &conn {
             log::warn!("ble: advertising failed: {e:?}");
@@ -175,9 +180,11 @@ pub async fn serve<'v, C: Controller>(
                 Either3::First(()) | Either3::Second(()) => {}
             }
             sh.link.borrow_mut().on_disconnect();
+            sh.wake.signal(());
             log::info!("ble: disconnected");
         }
         sh.state.set(BleState::Advertising);
+        sh.wake.signal(());
         Timer::after(Duration::from_millis(ADVERT_RESTART_MS)).await;
     }
 }
@@ -232,6 +239,7 @@ async fn events(
             GattConnectionEvent::PassKeyDisplay(_) => {
                 log::info!("ble: pairing");
                 sh.state.set(BleState::Pairing);
+                sh.wake.signal(());
             }
             GattConnectionEvent::PairingComplete {
                 security_level,
@@ -241,8 +249,10 @@ async fn events(
                 if authenticated(security_level) {
                     sh.link.borrow_mut().on_authenticated();
                     sh.state.set(BleState::Connected);
+                    sh.wake.signal(());
                     if let Some(b) = bond {
                         let _ = sh.new_bonds.borrow_mut().push_back(b);
+                        sh.wake.signal(());
                     }
                     sh.outbound.signal(());
                 } else {
@@ -254,6 +264,7 @@ async fn events(
                 if authenticated(security_level) {
                     sh.link.borrow_mut().on_authenticated();
                     sh.state.set(BleState::Connected);
+                    sh.wake.signal(());
                     sh.outbound.signal(());
                 }
             }
@@ -268,6 +279,7 @@ async fn events(
                 {
                     w.with_data(|_, data| {
                         sh.link.borrow_mut().on_write(data);
+                        sh.wake.signal(());
                     });
                 }
                 if let Ok(reply) = event.accept() {

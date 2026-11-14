@@ -310,6 +310,11 @@ impl<'d> Sx126x<'d> {
         self.cmd(&[0x84, 0x00])
     }
 
+    /// Until DIO1 rises: a new interrupt (reception, transmission done, error).
+    pub async fn wait_dio1(&mut self) {
+        self.dio1.wait_for_rising_edge().await;
+    }
+
     pub fn dio1(&self) -> bool {
         self.dio1.is_high()
     }

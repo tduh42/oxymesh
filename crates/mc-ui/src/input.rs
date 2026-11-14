@@ -158,6 +158,15 @@ impl Gestures {
         }
     }
 
+    /// Whether `button` counts as pressed (its last edge kept). A level that differs means an
+    /// edge was taken for a bounce: the runner samples again after the debounce time.
+    pub fn down(&self, button: Button) -> bool {
+        match button {
+            Button::A => self.a.pressed,
+            Button::B => self.b.pressed,
+        }
+    }
+
     /// Timed gestures (click after the double window, held ticks). Call often.
     pub fn poll(&mut self, now_ms: u64) -> Option<Gesture> {
         for button in [Button::A, Button::B] {

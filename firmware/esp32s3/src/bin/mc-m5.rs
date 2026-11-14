@@ -18,6 +18,7 @@ use core::cell::RefCell;
 
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
+use embassy_futures::select::{Either4, select, select4};
 use embassy_time::{Duration, Instant, Timer};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::iso_8859_1::{FONT_6X13, FONT_10X20};
@@ -57,7 +58,7 @@ use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, NoFrontEnd, Radio, Tx};
-use oxymesh_esp32s3::run::{self, boot, mc_now};
+use oxymesh_esp32s3::run::{self, Deadline, boot, mc_now};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -188,6 +189,68 @@ mod diag {
             a += 4;
         }
         (high - a, high - low + SKIP)
+    }
+
+    /// What the power work is judged on (`docs/measurements.md`): how often the main loop
+    /// runs and how long it is busy, and the battery voltage every 5 minutes, kept in RAM so a
+    /// run on battery is read back once USB is plugged in again.
+    pub struct Power {
+        passes: u32,
+        busy_us: u64,
+        window: embassy_time::Instant,
+        reads: u32,
+        /// (minutes since boot, battery mV, USB power).
+        history: heapless::Deque<(u32, u16, bool), 96>,
+    }
+
+    impl Power {
+        pub fn new() -> Self {
+            Self {
+                passes: 0,
+                busy_us: 0,
+                window: embassy_time::Instant::now(),
+                reads: 0,
+                history: heapless::Deque::new(),
+            }
+        }
+
+        pub fn pass(&mut self, start: embassy_time::Instant) {
+            self.passes += 1;
+            self.busy_us += start.elapsed().as_micros();
+        }
+
+        pub fn every_10_s(&mut self, battery_mv: u16, usb: bool) {
+            let span = self.window.elapsed().as_micros().max(1);
+            log::info!(
+                "power: {} passes in {} ms, busy {} us ({}.{:02} %)",
+                self.passes,
+                span / 1000,
+                self.busy_us,
+                self.busy_us * 100 / span,
+                self.busy_us * 10_000 / span % 100
+            );
+            self.passes = 0;
+            self.busy_us = 0;
+            self.window = embassy_time::Instant::now();
+            if self.reads % 30 == 0 {
+                if self.history.is_full() {
+                    self.history.pop_front();
+                }
+                let min = (embassy_time::Instant::now().as_secs() / 60) as u32;
+                let _ = self.history.push_back((min, battery_mv, usb));
+            }
+            if self.reads % 6 == 0 {
+                let mut line: heapless::String<1200> = heapless::String::new();
+                for (m, mv, usb) in &self.history {
+                    let _ = core::fmt::write(
+                        &mut line,
+                        format_args!("{m}:{mv}{} ", if *usb { "u" } else { "" }),
+                    );
+                }
+                log::info!("battery: {line}");
+            }
+            self.reads += 1;
+        }
     }
 
     pub fn log() {
@@ -442,7 +505,7 @@ async fn main(_spawner: Spawner) -> ! {
         let _ = io.set(pin::PERIPH_POWER, true);
     }
     let pull_up = InputConfig::default().with_pull(Pull::Up);
-    let btn_a = Input::new(p.GPIO21, pull_up);
+    let mut btn_a = Input::new(p.GPIO21, pull_up);
     let mut btn_b = Input::new(p.GPIO14, pull_up);
     let usb_in = Input::new(p.GPIO12, InputConfig::default());
     let mut adc_cfg = AdcConfig::new();
@@ -458,7 +521,8 @@ async fn main(_spawner: Spawner) -> ! {
         Uart::new(p.UART0, UartConfig::default())
             .expect("UART0")
             .with_tx(p.GPIO43)
-            .with_rx(p.GPIO44),
+            .with_rx(p.GPIO44)
+            .into_async(),
     );
 
     // Heap for the interface only (ADR-0008): the protocol core never allocates.
@@ -487,6 +551,8 @@ async fn main(_spawner: Spawner) -> ! {
     let mut next_blink = 0u64;
     let mut blink_off: Option<u64> = None;
     let mut last_ble = ble_of(&ble_sh);
+    // Until then, the buttons are sampled every 10 ms after an edge (debounce).
+    let mut buttons_settle = 0u64;
     // The loop owns the device and its peripherals; the Bluetooth side only shares `ble_sh`,
     // the buzzer only its requests.
     let ble_sh = &ble_sh;
@@ -495,7 +561,11 @@ async fn main(_spawner: Spawner) -> ! {
     let player = buzzer::run(p.LEDC, p.GPIO9, buzz);
     let main_loop = async move {
         let mut term = Terminal::new(panel::backend(panel_frame, app.grid())).expect("terminal");
+        #[cfg(feature = "debug-log")]
+        let mut power = diag::Power::new();
         loop {
+            #[cfg(feature = "debug-log")]
+            let pass_start = Instant::now();
             let now = mc_now();
 
             // Frames from the app, and the device's to it.
@@ -594,7 +664,7 @@ async fn main(_spawner: Spawner) -> ! {
                     diag::log();
                     // Boot lines can be lost on the CH340 (FIFO overrun); the state again here.
                     info!(
-                        "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {}; clock chip {:?} (lost power, time)",
+                        "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {}; clock chip {:?} (lost power, time); rx {} flood {} direct",
                         Instant::now().as_secs(),
                         boots::last(),
                         if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
@@ -612,11 +682,15 @@ async fn main(_spawner: Spawner) -> ! {
                         dev.mcu_temp_deci,
                         dev.node.rtc.now(mc_now()),
                         rtc_chip.as_mut().map(Pcf8563::inspect),
+                        dev.node.disp.stats.recv_flood,
+                        dev.node.disp.stats.recv_direct,
                     );
                 }
                 let raw_mv = adc.read_blocking(&mut bat_pin);
                 dev.battery_mv =
                     bat.push((u32::from(raw_mv) * m5::BATTERY_DIVIDER_MILLI / 1000) as u16);
+                #[cfg(feature = "debug-log")]
+                power.every_10_s(dev.battery_mv, usb_in.is_high());
             }
 
             // Interface: notifications, buttons, timers.
@@ -841,7 +915,59 @@ async fn main(_spawner: Spawner) -> ! {
                     let _ = epd.show_full(cur);
                 }
             }
-            Timer::after(Duration::from_millis(1)).await;
+            #[cfg(feature = "debug-log")]
+            power.pass(pass_start);
+
+            // Sleep until something is due or happens (P1): the radio's interrupt, a button,
+            // bytes from the computer, Bluetooth, or the earliest deadline.
+            let now_ms = Instant::now().as_millis();
+            let mut due = Deadline::within(Duration::from_millis(UI_TICK_MS));
+            due.at_mc(dev.next_wakeup());
+            due.at(radio.next_deadline());
+            due.at(next_battery);
+            due.at_ms(next_ui_tick);
+            if let Some(t) = gestures.next_deadline() {
+                due.at_ms(t);
+            }
+            if now_ms < buttons_settle
+                || btn_a.is_low() != gestures.down(Button::A)
+                || btn_b.is_low() != gestures.down(Button::B)
+            {
+                due.at_ms(now_ms + 10);
+            }
+            let timeout = u64::from(dev.node.prefs.ui.light_timeout_s) * 1000;
+            if light && timeout > 0 {
+                due.at_ms(light_until);
+            }
+            if dev.node.prefs.ui.led_unread && dev.unread_alerting() > 0 {
+                due.at_ms(next_blink);
+            }
+            if let Some(t) = blink_off {
+                due.at_ms(t);
+            }
+            if want_draw {
+                // The panel is busy refreshing: look again soon.
+                due.at_ms(now_ms + 20);
+            }
+            if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
+                // UART1 at 9600 baud: its 128-byte FIFO fills in about 130 ms.
+                due.at_ms(now_ms + 50);
+            }
+            let deadline = due.get();
+            if deadline <= Instant::now() {
+                embassy_futures::yield_now().await;
+            } else {
+                let woke = select4(
+                    Timer::at(deadline),
+                    radio.wait_irq(),
+                    select(btn_a.wait_for_any_edge(), btn_b.wait_for_any_edge()),
+                    select(link.wait_input(), ble_sh.wake.wait()),
+                )
+                .await;
+                if matches!(woke, Either4::Third(_)) {
+                    buttons_settle = Instant::now().as_millis() + 60;
+                }
+            }
         }
     };
 

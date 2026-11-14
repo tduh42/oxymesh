@@ -300,15 +300,24 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
             }
         }
 
-        // Noise floor, sampled like the C++ while listening.
+        // Noise floor, sampled like the C++ while listening: a round's samples in one burst,
+        // since the loop no longer turns every millisecond.
         let ms = Instant::now().as_millis();
         if ms >= self.next_noise_round {
             self.noise.trigger();
             self.next_noise_round = ms + mc_core::noise::ROUND_MS;
         }
-        let sx = &mut self.sx;
-        self.noise
-            .step(!self.transmitting, rx.receiving, || sx.rssi_inst().ok());
+        if !self.transmitting && !rx.receiving {
+            for _ in 0..mc_core::noise::SAMPLES {
+                if !self.noise.sampling() {
+                    break;
+                }
+                let sx = &mut self.sx;
+                self.noise.step(true, false, || sx.rssi_inst().ok());
+            }
+        }
+        // The pass after a round's last sample turns it into the floor.
+        self.noise.step(false, false, || None);
         m.noise_floor(self.noise.floor());
 
         // AGC reset, when set (`agc.reset.interval`): skipped if a packet is coming in or
@@ -323,6 +332,25 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
             self.watch.reset();
         }
         event
+    }
+
+    /// When the radio needs a look again without an interrupt: the next noise round, a
+    /// transmission's give-up time, and soon while DIO1 is already high (a latched flag
+    /// hides the next rising edge).
+    pub fn next_deadline(&self) -> Instant {
+        let mut t = Instant::from_millis(self.next_noise_round);
+        if self.transmitting {
+            t = t.min(self.tx_started + Duration::from_secs(10));
+        }
+        if self.sx.dio1() {
+            t = t.min(Instant::now() + Duration::from_millis(5));
+        }
+        t
+    }
+
+    /// Until the radio raises an interrupt.
+    pub async fn wait_irq(&mut self) {
+        self.sx.wait_dio1().await;
     }
 
     fn end_tx(&mut self) {

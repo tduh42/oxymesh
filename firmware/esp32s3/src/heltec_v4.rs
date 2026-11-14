@@ -3,7 +3,7 @@
 //! as MeshCore drives them (`variants/heltec_v4/`, MIT), cross-checked with Meshtastic's
 //! variant (hardware facts only) and loranet (same author).
 
-use esp_hal::Blocking;
+use esp_hal::Async;
 use esp_hal::gpio::{Flex, InputConfig, Level, Output, OutputConfig, OutputPin, Pin, Pull};
 use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
 use mc_node::Prefs;
@@ -121,12 +121,18 @@ impl FrontEnd for Fem<'_> {
 /// computer that is not reading: a frame nobody takes within a few milliseconds is dropped,
 /// so the node runs on unplugged.
 pub struct UsbWire<'d> {
-    pub usb: UsbSerialJtag<'d, Blocking>,
+    pub usb: UsbSerialJtag<'d, Async>,
 }
 
 impl Wire for UsbWire<'_> {
     fn read_ready(&mut self) -> bool {
         true
+    }
+
+    async fn read_async(&mut self, buf: &mut [u8]) -> usize {
+        embedded_io_async::Read::read(&mut self.usb, buf)
+            .await
+            .unwrap_or(0)
     }
 
     fn read(&mut self, buf: &mut [u8]) -> usize {

@@ -37,6 +37,10 @@ pub struct Console {
     role: Role,
     line: [u8; LINE_MAX],
     len: usize,
+    /// Bytes read and not yet taken (what follows a complete line waits for the next poll).
+    stash: [u8; 32],
+    stashed: usize,
+    taken: usize,
 }
 
 impl Console {
@@ -45,6 +49,9 @@ impl Console {
             role,
             line: [0; LINE_MAX],
             len: 0,
+            stash: [0; 32],
+            stashed: 0,
+            taken: 0,
         }
     }
 
@@ -68,6 +75,30 @@ impl Console {
         let _ = out.write_str("\r\n");
     }
 
+    /// Until something is typed (kept for the next `poll`); at once if something is kept.
+    pub async fn wait_input<W: Wire>(&mut self, wire: &mut W) {
+        if self.taken >= self.stashed {
+            self.stashed = wire.read_async(&mut self.stash).await;
+            self.taken = 0;
+        }
+    }
+
+    /// One character, echoed: is the line complete?
+    fn take<W: Wire>(&mut self, c: u8, wire: &mut W) -> bool {
+        if c == b'\n' {
+            if self.role == Role::Room {
+                wire.write_all(&[c]);
+            }
+            return false;
+        }
+        if let Some(slot) = self.line.get_mut(self.len) {
+            *slot = c;
+            self.len += 1;
+        }
+        wire.write_all(&[c]);
+        c == b'\r' || self.len >= self.line_max() - 1
+    }
+
     /// Reads what came, runs a complete line.
     pub fn poll<W: Wire>(
         &mut self,
@@ -77,30 +108,21 @@ impl Console {
         now: mc_core::Instant,
         rng: &mut impl Rng,
     ) {
-        let mut buf = [0u8; 32];
         let mut done = false;
-        while !done && wire.read_ready() {
-            let n = wire.read(&mut buf);
-            if n == 0 {
-                break;
-            }
-            for &c in buf.get(..n).unwrap_or(&[]) {
-                if c == b'\n' {
-                    if self.role == Role::Room {
-                        wire.write_all(&[c]);
-                    }
-                    continue;
+        while !done {
+            if self.taken >= self.stashed {
+                if !wire.read_ready() {
+                    break;
                 }
-                if let Some(slot) = self.line.get_mut(self.len) {
-                    *slot = c;
-                    self.len += 1;
-                }
-                wire.write_all(&[c]);
-                if c == b'\r' || self.len >= self.line_max() - 1 {
-                    done = true;
+                self.stashed = wire.read(&mut self.stash).min(self.stash.len());
+                self.taken = 0;
+                if self.stashed == 0 {
                     break;
                 }
             }
+            let c = self.stash.get(self.taken).copied().unwrap_or(b'\r');
+            self.taken += 1;
+            done = self.take(c, wire);
         }
         if !done {
             return;
