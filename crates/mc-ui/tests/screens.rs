@@ -445,3 +445,160 @@ fn body_overlays(app: &App) -> Vec<overlay::Overlay> {
         .cloned()
         .collect()
 }
+
+/// The texts of the pixel scenes over the body (ADR-0011), banner card included.
+fn body_texts(app: &App) -> Vec<String> {
+    body_overlays(app)
+        .iter()
+        .flat_map(|o| match o {
+            overlay::Overlay::Scene { scene, .. } | overlay::Overlay::Over { scene, .. } => {
+                scene.texts().into_iter().map(String::from).collect()
+            }
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+fn draw_panel(app: &mut App, grid: Grid, c: &Ctx<'_>) {
+    let mut t = Terminal::new(TestBackend::new(grid.cols, grid.rows)).unwrap();
+    t.draw(|f| app.draw(f, c)).unwrap();
+}
+
+/// Home, the lists, a conversation and a contact draw their body in pixels; the rest stays
+/// text.
+#[test]
+fn main_screens_draw_their_body_in_pixels() {
+    let w = world();
+    let c = ctx(&w);
+    let cases: [(&[Gesture], &[&str]); 6] = [
+        (
+            &[],
+            &["Messages", "Contacts", "Map", "Bob", "Coffee at the refuge"],
+        ),
+        (&[Long(A)], &["New message", "Bob", "Public", "now"]),
+        (&[Long(A), Click(A), Long(A)], &["Coffee at the refuge"]),
+        (&[Click(A), Long(A)], &["Alice", "Bob"]),
+        (&[Click(A), Click(A), Long(A)], &["Add #channel", "Public"]),
+        (
+            &[Click(A), Long(A), Long(A)],
+            &["Write", "Messages", "Ping", "Trace route", "Remove"],
+        ),
+    ];
+    for grid in [LARGE, COMPACT] {
+        for (gestures, want) in cases {
+            let mut app = App::new(grid, true);
+            press(&mut app, &c, gestures);
+            draw_panel(&mut app, grid, &c);
+            let body = body_overlays(&app);
+            assert!(
+                matches!(body.as_slice(), [overlay::Overlay::Scene { .. }]),
+                "{gestures:?}: one scene for the body, got {body:?}"
+            );
+            let texts = body_texts(&app);
+            for w in want {
+                assert!(
+                    texts.iter().any(|t| t.contains(w)),
+                    "{gestures:?}: {w:?} missing from {texts:?}"
+                );
+            }
+        }
+        // Tools stays a text list.
+        let mut app = App::new(grid, true);
+        press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
+        draw_panel(&mut app, grid, &c);
+        assert!(body_overlays(&app).is_empty());
+    }
+}
+
+/// A new direct message fades the screen and shows a card over it, pixel screen or text one.
+#[test]
+fn the_banner_is_a_card_over_the_faded_screen() {
+    use mc_node::device::UiEvent;
+    use mc_node::history::Peer;
+    use mc_ui::scene::Item;
+    let w = world();
+    let c = ctx(&w);
+    let bob = w.nodes[0]
+        .dev
+        .history()
+        .iter()
+        .filter(|m| matches!(m.peer, Peer::Contact(_)))
+        .last()
+        .unwrap();
+    let e = UiEvent::Message {
+        seq: bob.seq,
+        peer: bob.peer,
+        outgoing: false,
+    };
+    for grid in [LARGE, COMPACT] {
+        for (gestures, under) in [
+            (&[][..], 1),
+            (&[Click(A), Click(A), Click(A), Long(A)][..], 0),
+        ] {
+            let mut app = App::new(grid, true);
+            press(&mut app, &c, gestures);
+            app.event(&e, &c);
+            draw_panel(&mut app, grid, &c);
+            let body = body_overlays(&app);
+            assert_eq!(body.len(), under + 1, "{gestures:?}: {body:?}");
+            let Some(overlay::Overlay::Over { scene, .. }) = body.last() else {
+                panic!("{gestures:?}: no card: {body:?}");
+            };
+            assert!(scene.items.iter().any(|i| matches!(i, Item::Dither { .. })));
+            let texts = scene.texts();
+            assert!(texts.contains(&"Bob"), "{texts:?}");
+            assert!(texts.iter().any(|t| t.contains("Coffee")), "{texts:?}");
+            // Over a text screen the text banner's cells are blanked first.
+            let blanks = matches!(
+                scene.items.first(),
+                Some(Item::Rect {
+                    fill: Some(false),
+                    ..
+                })
+            );
+            assert_eq!(blanks, under == 0, "{gestures:?}");
+        }
+    }
+}
+
+/// A long conversation opens on the newest bubble and scrolls up by half a body.
+#[test]
+fn conversations_scroll_in_pixels() {
+    let mut w = world();
+    let to: [u8; 6] = w.node(0).id.pub_key()[..6].try_into().unwrap();
+    for i in 0..8 {
+        let now = w.now;
+        let ts = w.node(2).time(now);
+        let text = format!("Message number {i} with enough words to wrap on two lines");
+        w.node(2)
+            .send_text(now, &to, 0, 0, ts, text.as_bytes())
+            .unwrap();
+        w.run(Duration::from_secs(5));
+    }
+    let c = ctx(&w);
+    for grid in [LARGE, COMPACT] {
+        let mut app = App::new(grid, true);
+        press(&mut app, &c, &[Long(A), Click(A), Long(A)]);
+        draw_panel(&mut app, grid, &c);
+        let newest = body_texts(&app);
+        assert!(newest.iter().any(|t| t.contains("number 7")), "{newest:?}");
+        assert!(!newest.iter().any(|t| t.contains("Coffee")), "{newest:?}");
+        press(&mut app, &c, &[Double(A), Double(A), Double(A), Double(A)]);
+        draw_panel(&mut app, grid, &c);
+        let older = body_texts(&app);
+        assert!(!older.iter().any(|t| t.contains("number 7")), "{older:?}");
+        // Far enough up, the top: Bob's first message.
+        for _ in 0..20 {
+            press(&mut app, &c, &[Double(A)]);
+        }
+        draw_panel(&mut app, grid, &c);
+        let top = body_texts(&app);
+        assert!(top.iter().any(|t| t.contains("Coffee")), "{top:?}");
+        // And back down to the newest.
+        for _ in 0..30 {
+            press(&mut app, &c, &[Click(A)]);
+        }
+        draw_panel(&mut app, grid, &c);
+        assert_eq!(body_texts(&app), newest);
+    }
+}

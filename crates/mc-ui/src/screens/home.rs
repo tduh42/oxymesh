@@ -14,14 +14,17 @@ use crate::app::{Input, Nav, Paint, Screen, Ui};
 use crate::chrome::Footer;
 use crate::clock;
 use crate::panel::COMPACT;
+use crate::scene::{self, Align, Font, Icon, IconSize, Scene};
 use crate::theme;
 
-const LAUNCHER: [(&str, Dest); 5] = [
-    ("Messages", Dest::Messages),
-    ("Contacts", Dest::Contacts),
-    ("Channels", Dest::Channels),
-    ("Tools", Dest::Tools),
-    ("Settings", Dest::Settings),
+/// Settings stays last: a double click from the first entry reaches it.
+const LAUNCHER: [(&str, Dest, Icon); 6] = [
+    ("Messages", Dest::Messages, Icon::Chat),
+    ("Contacts", Dest::Contacts, Icon::People),
+    ("Channels", Dest::Channels, Icon::Broadcast),
+    ("Tools", Dest::Tools, Icon::Tools),
+    ("Map", Dest::Map, Icon::Pin),
+    ("Settings", Dest::Settings, Icon::Settings),
 ];
 
 /// The advertised name, else the contact's, else the short key.
@@ -139,7 +142,7 @@ impl Screen for Home {
         let new = dev.unread_alerting();
         let launcher: Vec<(String, String)> = LAUNCHER
             .iter()
-            .map(|(label, d)| {
+            .map(|(label, d, _)| {
                 let detail = match d {
                     Dest::Messages if new > 0 => format!("{new} new"),
                     Dest::Contacts => format!("{}", dev.node.contacts.list.len()),
@@ -160,7 +163,7 @@ impl Screen for Home {
 
     fn input(&mut self, input: Input, _ui: &Ui<'_>) -> Nav {
         if step(&mut self.state, LAUNCHER.len(), input) {
-            let (_, d) = LAUNCHER[self.state.selected().unwrap_or(0) % LAUNCHER.len()];
+            let (_, d, _) = LAUNCHER[self.state.selected().unwrap_or(0) % LAUNCHER.len()];
             return Nav::Push(open(d));
         }
         Nav::Stay
@@ -179,6 +182,88 @@ impl Screen for Home {
 
     fn header_time(&self) -> bool {
         false
+    }
+
+    /// The dashboard (ADR-0011): clock and date, GPS and noise, the last message, the tiles.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let c = ui.ctx;
+        let dev = c.dev;
+        let wi = w as i16;
+        let t = clock::local(c.unix, c.tz_offset_min);
+        let mut sc = Scene::new();
+        sc.text(4, 34, Font::Digits, Align::Left, true, &clock::hhmm(t));
+        let dx = 92;
+        sc.text(dx, 16, Font::B12, Align::Left, true, &clock::weekday(t));
+        let dm = scene::ellipsize(Font::R12, &clock::day_month(t), wi - dx - 2);
+        sc.text(dx, 32, Font::R12, Align::Left, true, &dm);
+        // GPS and noise floor.
+        let gps = match c.gps {
+            Some(g) => format!("GPS fix, {} sats", g.satellites),
+            None if dev.gps_active() => String::from("GPS, no fix"),
+            None => String::from("GPS off"),
+        };
+        sc.icon(4, 40, Icon::Pin, IconSize::S8, true);
+        sc.text(15, 47, Font::R8, Align::Left, true, &gps);
+        sc.icon(wi / 2 + 12, 40, Icon::Signal, IconSize::S8, true);
+        sc.text(
+            wi / 2 + 23,
+            47,
+            Font::R8,
+            Align::Left,
+            true,
+            &format!("{} dBm", dev.noise_floor),
+        );
+        // The last message received.
+        let (cy, ch) = (52i16, 43u16);
+        sc.rect(3, cy, w - 6, ch, 5, None, Some(true));
+        match dev.history().iter().filter(|m| !m.outgoing).last() {
+            Some(m) => {
+                let icon = if dev.unread_alerting() > 0 {
+                    Icon::Mail
+                } else {
+                    Icon::Chat
+                };
+                sc.icon(8, cy + 5, icon, IconSize::S8, true);
+                let when = clock::ago(m.at, c.unix);
+                sc.text(wi - 8, cy + 12, Font::R8, Align::Right, true, &when);
+                let who = super::peer_name(ui, m.peer);
+                let room = wi - 20 - scene::width(Font::R8, &when) - 14;
+                let who = scene::ellipsize(Font::B10, &who, room);
+                sc.text(20, cy + 12, Font::B10, Align::Left, true, &who);
+                let text = String::from_utf8_lossy(&m.text);
+                let lines = scene::wrap(Font::R10, &text, wi - 16);
+                for (i, l) in lines.iter().take(2).enumerate() {
+                    let l = if i == 1 && lines.len() > 2 {
+                        scene::ellipsize(Font::R10, &format!("{l} ..."), wi - 16)
+                    } else {
+                        l.clone()
+                    };
+                    sc.text(8, cy + 25 + 12 * i as i16, Font::R10, Align::Left, true, &l);
+                }
+            }
+            None => {
+                let heard = match dev.heard().last() {
+                    Some(n) => format!("Heard {} {}", heard_name(ui, n), clock::ago(n.at, c.unix)),
+                    None => String::from("Nothing heard yet"),
+                };
+                sc.text(8, cy + 16, Font::B10, Align::Left, true, "No messages yet");
+                let heard = scene::ellipsize(Font::R8, &heard, wi - 16);
+                sc.text(8, cy + 32, Font::R8, Align::Left, true, &heard);
+            }
+        }
+        // The launcher: 3 × 2 tiles.
+        let sel = self.state.selected().unwrap_or(0) % LAUNCHER.len();
+        let tw = (w - 8 - 4) / 3;
+        let th = 33u16;
+        let new = dev.unread_alerting();
+        for (i, (label, d, icon)) in LAUNCHER.iter().enumerate() {
+            let (col, row) = (i as i16 % 3, i as i16 / 3);
+            let x = 4 + col * (tw as i16 + 2);
+            let y = cy + ch as i16 + 4 + row * (th as i16 + 2);
+            let count = if *d == Dest::Messages { new } else { 0 };
+            super::pixel::tile(&mut sc, x, y, tw, th, *icon, label, count, i == sel);
+        }
+        Some(sc)
     }
 
     fn paints(&self, body: Rect, ui: &Ui<'_>) -> Vec<(Rect, Paint)> {

@@ -301,6 +301,8 @@ pub fn footer_scene(w: u16, h: u16, hints: &Footer, toast: Option<&str>, ui: &Ui
     }
     let right = match (hints.b_click, hints.b_hold) {
         (Some(b), _) => String::from(b),
+        // The text footer's sun has no glyph in these fonts; the panel has room for the word.
+        (None, Some("☀")) => String::from("hold: light"),
         (None, Some(b)) => format!("hold: {b}"),
         (None, None) => String::new(),
     };

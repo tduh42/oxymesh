@@ -13,6 +13,10 @@ pub const TOUR: &[(&str, &[Gesture])] = &[
     ("messages", &[Long(A)]),
     // Messages: "+ New message" then the conversations, unread first (Bob).
     ("conversation", &[Long(A), Click(A), Long(A)]),
+    (
+        "channel_conversation",
+        &[Long(A), Click(A), Click(A), Long(A)],
+    ),
     ("compose", &[Long(A), Click(A), Long(A), Long(A)]),
     // The first candidate of an empty text is the first quick reply; then Send is selected.
     (

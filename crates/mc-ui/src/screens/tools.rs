@@ -52,7 +52,7 @@ fn hops_text(h: u8) -> String {
 }
 
 /// Our position: the GPS fix, else the one set in the settings.
-fn my_position(ui: &Ui<'_>) -> Option<(i32, i32)> {
+pub(crate) fn my_position(ui: &Ui<'_>) -> Option<(i32, i32)> {
     if let Some(g) = ui.ctx.gps {
         return Some((g.lat, g.lon));
     }
@@ -60,7 +60,7 @@ fn my_position(ui: &Ui<'_>) -> Option<(i32, i32)> {
     (p.lat != 0 || p.lon != 0).then_some((p.lat, p.lon))
 }
 
-fn position_of(c: &Contact) -> Option<(i32, i32)> {
+pub(crate) fn position_of(c: &Contact) -> Option<(i32, i32)> {
     (c.lat != 0 || c.lon != 0).then_some((c.lat, c.lon))
 }
 

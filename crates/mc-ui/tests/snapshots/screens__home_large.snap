@@ -9,11 +9,11 @@ expression: "text(&mut app, grid, &c)"
 |                         |
 |     Thu 5 Nov 2026      |
 |2 new messages           |
-|Bob: Coffee at the refuge|
 |                         |
 |▸ Messages          2 new|
 |  Contacts              2|
 |  Channels              1|
 |  Tools                  |
+|  Map                    |
 |  Settings               |
 |A▸next hold▸open       B☀|

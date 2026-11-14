@@ -108,6 +108,7 @@ pub enum Icon {
     Lock,
     Plus,
     Warning,
+    Refresh,
 }
 
 impl Icon {
@@ -139,6 +140,7 @@ impl Icon {
             Icon::Lock => 202,
             Icon::Plus => 234,
             Icon::Warning => 280,
+            Icon::Refresh => 243,
         }
     }
 }

@@ -7,6 +7,7 @@ mod home;
 mod info;
 mod lists;
 mod menu;
+pub(crate) mod pixel;
 pub mod settings;
 pub mod setup;
 pub mod tools;

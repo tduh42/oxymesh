@@ -14,12 +14,14 @@ use ratatui_core::text::Line;
 use ratatui_widgets::list::ListState;
 use ratatui_widgets::paragraph::{Paragraph, Wrap};
 
+use super::pixel::{self, Badge, Dot, Row, initials, rich_list};
 use super::{Contacts, draw_list, peer_name, rows, step};
 use crate::act::{Intent, Outcome};
 use crate::app::{Input, Nav, Screen, Ui};
 use crate::chrome::{self, Footer};
 use crate::clock;
 use crate::keyboard::{Cand, Key, Keyboard, Mode, recent_words};
+use crate::scene::{self, Align, Font, Icon, IconSize, Scene};
 use crate::theme;
 
 /// Longest message text (`MAX_TEXT_LEN`, 10 AES blocks).
@@ -62,7 +64,57 @@ fn conversations(ui: &Ui<'_>) -> Vec<(Peer, String, String)> {
         .collect()
 }
 
+/// The conversations as pixel rows, in the same order as [`conversations`].
+fn conversation_rows(ui: &Ui<'_>) -> Vec<Row> {
+    let h = ui.ctx.dev.history();
+    let prefs = &ui.ctx.dev.node.prefs.ui;
+    let muted = |p: Peer| matches!(p, Peer::Channel(i) if prefs.is_muted(i));
+    let mut v: Vec<(Peer, &Msg, usize)> = h
+        .conversations()
+        .iter()
+        .map(|(p, m)| (*p, *m, h.unread_with(*p)))
+        .collect();
+    v.sort_by_key(|(p, m, unread)| (*unread == 0 || muted(*p), core::cmp::Reverse(m.seq)));
+    v.into_iter()
+        .map(|(p, m, unread)| {
+            let name = peer_name(ui, p);
+            let text = String::from_utf8_lossy(&m.text);
+            let preview = if m.outgoing {
+                format!("You: {text}")
+            } else {
+                String::from(text)
+            };
+            Row {
+                badge: Some(match p {
+                    Peer::Channel(_) => Badge::Hash,
+                    Peer::Contact(_) => Badge::Initials(initials(&name)),
+                }),
+                title: name,
+                bold: unread > 0,
+                right: clock::ago(m.at, ui.ctx.unix),
+                sub: Some(preview),
+                dot: match (unread, muted(p)) {
+                    (0, _) => Dot::None,
+                    (_, true) => Dot::Muted,
+                    (_, false) => Dot::Unread,
+                },
+            }
+        })
+        .collect()
+}
+
 impl Screen for Messages {
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut rows_ = alloc::vec![Row::action(Icon::Pencil, "New message")];
+        rows_.extend(conversation_rows(ui));
+        let sel = self.state.selected().unwrap_or(0).min(rows_.len() - 1);
+        let mut sc = rich_list(ui, w, h, &rows_, sel);
+        if rows_.len() == 1 {
+            sc.text(8, 50, Font::R10, Align::Left, true, "No messages yet.");
+        }
+        Some(sc)
+    }
+
     fn title(&self, _ui: &Ui<'_>) -> String {
         // The header already counts the unread messages.
         String::from("Messages")
@@ -109,6 +161,15 @@ pub struct Conversation {
     /// Lines last drawn, to bound scrolling.
     total: usize,
     page: usize,
+    /// On the panel the same in pixels: drawn as bubbles (ADR-0011).
+    px: Option<PxScroll>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PxScroll {
+    up: i32,
+    total: i32,
+    page: i32,
 }
 
 impl Conversation {
@@ -118,8 +179,99 @@ impl Conversation {
             up: 0,
             total: 0,
             page: 1,
+            px: None,
         }
     }
+}
+
+/// What goes under a bubble: the time, then the route (received) or the status (sent).
+/// A delivered message gets a check mark, drawn as an icon before its round trip.
+fn meta(ui: &Ui<'_>, m: &Msg) -> (String, Option<(Icon, String)>) {
+    let c = ui.ctx;
+    let when = clock::stamp(m.at, c.unix, c.tz_offset_min);
+    if !m.outgoing {
+        let snr = if m.snr4 == 0 {
+            String::new()
+        } else {
+            format!(" · {} dB", m.snr4 / 4)
+        };
+        return (format!("{when} · {}{snr}", route(m)), None);
+    }
+    match m.status {
+        Status::Delivered { rtt_ms } => (
+            when,
+            Some((
+                Icon::Check,
+                format!("{}.{} s", rtt_ms / 1000, rtt_ms % 1000 / 100),
+            )),
+        ),
+        Status::Failed => (when, Some((Icon::Cross, String::from("failed")))),
+        _ => (format!("{when} · {}", status(m).replace('…', "...")), None),
+    }
+}
+
+/// One message as a bubble: its height, and its drawing from y = 0.
+fn bubble(ui: &Ui<'_>, m: &Msg, channel: bool, w: i16) -> (i16, Scene) {
+    let s = pixel::sizes(ui);
+    let font = s.body;
+    let lh = font.line_height();
+    let text = String::from_utf8_lossy(&m.text);
+    let (sender, body) = match (channel && !m.outgoing, text.split_once(": ")) {
+        (true, Some((who, t))) => (Some(String::from(who)), String::from(t)),
+        (true, None) => (Some(String::from("?")), String::from(text.as_ref())),
+        _ => (None, String::from(text.as_ref())),
+    };
+    let max_w = w * 7 / 10;
+    let mut lines = scene::wrap(font, &body, max_w - 12);
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    let (meta_text, mark) = meta(ui, m);
+    let meta_w = scene::width(s.small, &meta_text)
+        + mark
+            .as_ref()
+            .map_or(0, |(_, t)| 14 + scene::width(s.small, t));
+    let text_w = lines
+        .iter()
+        .map(|l| scene::width(font, l))
+        .max()
+        .unwrap_or(0);
+    let bw = (text_w + 12).max(meta_w.min(max_w)).max(24);
+    let mut sc = Scene::new();
+    let mut y = 0i16;
+    if let Some(who) = sender {
+        let who = scene::ellipsize(s.small_bold, &who, w - 16);
+        sc.text(8, y + 8, s.small_bold, Align::Left, true, &who);
+        y += 10;
+    }
+    let bh = lh * lines.len() as i16 + 8;
+    let x = if m.outgoing { w - 4 - bw } else { 4 };
+    sc.rect(x, y, bw as u16, bh as u16, 6, Some(m.outgoing), Some(true));
+    for (i, l) in lines.iter().enumerate() {
+        sc.text(
+            x + 6,
+            y + 4 + font.ascent() + lh * i as i16,
+            font,
+            Align::Left,
+            !m.outgoing,
+            l,
+        );
+    }
+    let my = y + bh + 9;
+    if m.outgoing {
+        let mut right = w - 6;
+        if let Some((icon, tail)) = &mark {
+            sc.text(right, my, s.small, Align::Right, true, tail);
+            right -= scene::width(s.small, tail) + 11;
+            sc.icon(right, my - 7, *icon, IconSize::S8, true);
+            right -= 3;
+        }
+        sc.text(right, my, s.small, Align::Right, true, &meta_text);
+    } else {
+        let t = scene::ellipsize(s.small, &meta_text, w - 8);
+        sc.text(x + 2, my, s.small, Align::Left, true, &t);
+    }
+    (my + 5, sc)
 }
 
 fn route(m: &Msg) -> String {
@@ -190,6 +342,69 @@ impl Screen for Conversation {
         peer_name(ui, self.peer)
     }
 
+    /// Bubbles, the newest at the bottom; scrolled in pixels.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let (wi, hi) = (w as i16, h as i16);
+        let channel = matches!(self.peer, Peer::Channel(_));
+        let mut sc = Scene::new();
+        let blocks: Vec<(i16, Scene)> = ui
+            .ctx
+            .dev
+            .history()
+            .with(self.peer)
+            .map(|m| bubble(ui, m, channel, wi))
+            .collect();
+        if blocks.is_empty() {
+            self.px = Some(PxScroll {
+                page: 1,
+                ..PxScroll::default()
+            });
+            sc.icon(wi / 2 - 8, hi / 2 - 30, Icon::Chat, IconSize::S16, true);
+            sc.text(
+                wi / 2,
+                hi / 2,
+                Font::B10,
+                Align::Center,
+                true,
+                "No messages yet",
+            );
+            sc.text(
+                wi / 2,
+                hi / 2 + 16,
+                Font::R8,
+                Align::Center,
+                true,
+                "Hold A to write.",
+            );
+            return Some(sc);
+        }
+        let top = 4i32;
+        let total: i32 = top + blocks.iter().map(|(bh, _)| i32::from(*bh)).sum::<i32>();
+        let mut px = self.px.unwrap_or_default();
+        px.total = total;
+        px.page = (i32::from(hi) / 2).max(1);
+        px.up = px.up.clamp(0, (total - i32::from(hi)).max(0));
+        self.px = Some(px);
+        // The window's top, in content pixels: the start if it all fits, else from the bottom.
+        let from = (total - i32::from(hi) - px.up).max(0);
+        let mut y = top - from;
+        for (bh, b) in blocks {
+            let bh = i32::from(bh);
+            if y + bh > 0 && y < i32::from(hi) {
+                sc.append(b, 0, y as i16);
+            }
+            y += bh;
+        }
+        // Where the window is, on the right edge.
+        if total > i32::from(hi) {
+            sc.vline(wi - 1, 0, hi - 1);
+            let thumb = (i32::from(hi) * i32::from(hi) / total).max(8);
+            let ty = (from * (i32::from(hi) - thumb) / (total - i32::from(hi)).max(1)) as i16;
+            sc.rect(wi - 3, ty, 3, thumb as u16, 0, Some(true), None);
+        }
+        Some(sc)
+    }
+
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let all = lines(ui, self.peer, usize::from(body.width));
         let h = usize::from(body.height);
@@ -216,6 +431,14 @@ impl Screen for Conversation {
     }
 
     fn input(&mut self, input: Input, _ui: &Ui<'_>) -> Nav {
+        if let Some(px) = &mut self.px {
+            match input {
+                Input::Next(n) => px.up = (px.up - px.page * i32::from(n)).max(0),
+                Input::Prev => px.up = (px.up + px.page).min(px.total),
+                Input::Open => return Nav::Push(Box::new(Compose::to(self.peer))),
+            }
+            return Nav::Stay;
+        }
         match input {
             // Down: towards the newest.
             Input::Next(n) => self.up = self.up.saturating_sub(self.page * usize::from(n)),

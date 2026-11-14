@@ -149,7 +149,7 @@ pub trait Screen: core::fmt::Debug {
     }
     /// The whole body drawn in pixels on the panel (ADR-0011), `w`×`h`; `draw` stays the
     /// text version (terminal, snapshots). `None`: the cells and `paints` show.
-    fn scene(&self, _w: u16, _h: u16, _ui: &Ui<'_>) -> Option<Scene> {
+    fn scene(&mut self, _w: u16, _h: u16, _ui: &Ui<'_>) -> Option<Scene> {
         None
     }
     /// The conversation shown, if any (no banner for it; new messages are read at once).
@@ -548,7 +548,8 @@ impl App {
             w: u32::from(cells.width) * cw,
             h: u32::from(cells.height) * ch,
         };
-        let body_scene = if self.panel && !covered {
+        // A banner keeps the screen's own drawing: it fades under the card.
+        let body_scene = if self.panel && self.popup.is_none() {
             let at = px(areas.body);
             top.scene(at.w as u16, at.h as u16, &ui)
                 .map(|scene| (at, scene))
@@ -621,7 +622,25 @@ impl App {
         if let Some(p) = &self.popup {
             draw_confirm(f, areas.body, p, &ui);
         } else if let Some(seq) = self.banner {
-            draw_banner(f, areas.body, seq, &ui);
+            let rows = draw_banner(f, areas.body, seq, &ui);
+            if self.panel {
+                let at = px(areas.body);
+                // Over a text screen, the text banner's cells are left to the card: they are
+                // blanked first.
+                let blank = if self
+                    .overlays
+                    .iter()
+                    .any(|o| matches!(o, Overlay::Scene { .. }))
+                {
+                    0
+                } else {
+                    skip(f, rows);
+                    rows.height as i16 * ch as i16
+                };
+                if let Some(scene) = banner_scene(at.w as u16, at.h as u16, blank, seq, &ui) {
+                    self.overlays.push(Overlay::Over { at, scene });
+                }
+            }
         }
         // A phone pairing covers everything: its PIN is the one thing to read.
         if ctx.ble.state == BleState::Pairing {
@@ -723,10 +742,62 @@ fn draw_pairing(f: &mut Frame<'_>, body: Rect, pin: u32) -> Rect {
     digits
 }
 
+/// The banner on the panel: the body faded, and a card with the sender, when, and the
+/// start of the text. `blank` pixels at the top are white first (the text banner's cells).
+fn banner_scene(w: u16, h: u16, blank: i16, seq: u32, ui: &Ui<'_>) -> Option<Scene> {
+    use crate::scene::{self, Align, Font, Icon, IconSize};
+    let m = ui.ctx.dev.history().get(seq)?;
+    let mut sc = Scene::new();
+    if blank > 0 {
+        sc.rect(0, 0, w, blank as u16, 0, Some(false), None);
+    }
+    sc.dither(0, 0, w, h);
+    let (x, y, cw) = (6i16, 8i16, w.saturating_sub(15));
+    let text = String::from_utf8_lossy(&m.text);
+    let lines = scene::wrap(Font::R10, &text, cw as i16 - 16);
+    let n = lines.len().clamp(1, 3) as i16;
+    let chh = (34 + 13 * n) as u16;
+    // A shadow, then the card.
+    sc.rect(x + 3, y + 3, cw, chh, 6, Some(true), None);
+    sc.rect(x, y, cw, chh, 6, Some(false), Some(true));
+    sc.rect(x + 1, y + 1, cw - 2, chh - 2, 5, None, Some(true));
+    sc.icon(x + 8, y + 7, Icon::Mail, IconSize::S16, true);
+    let when = crate::clock::ago(m.at, ui.ctx.unix);
+    let right = x + cw as i16 - 8;
+    sc.text(right, y + 19, Font::R8, Align::Right, true, &when);
+    let who = screens::peer_name(ui, m.peer);
+    let room = right - (x + 30) - scene::width(Font::R8, &when) - 6;
+    sc.text(
+        x + 30,
+        y + 20,
+        Font::B12,
+        Align::Left,
+        true,
+        &scene::ellipsize(Font::B12, &who, room),
+    );
+    for (i, l) in lines.iter().take(3).enumerate() {
+        let l = if i == 2 && lines.len() > 3 {
+            scene::ellipsize(Font::R10, &format!("{l} ..."), cw as i16 - 16)
+        } else {
+            l.clone()
+        };
+        sc.text(
+            x + 8,
+            y + 39 + 13 * i as i16,
+            Font::R10,
+            Align::Left,
+            true,
+            &l,
+        );
+    }
+    Some(sc)
+}
+
 /// New direct message: sender and the start of the text, over the top of the body.
-fn draw_banner(f: &mut Frame<'_>, body: Rect, seq: u32, ui: &Ui<'_>) {
+/// Returns the rows it took.
+fn draw_banner(f: &mut Frame<'_>, body: Rect, seq: u32, ui: &Ui<'_>) -> Rect {
     let Some(m) = ui.ctx.dev.history().get(seq) else {
-        return;
+        return Rect { height: 0, ..body };
     };
     let w = usize::from(body.width);
     let area = Rect {
@@ -744,6 +815,7 @@ fn draw_banner(f: &mut Frame<'_>, body: Rect, seq: u32, ui: &Ui<'_>) {
         lines.push(Line::from(l));
     }
     f.render_widget(Paragraph::new(lines).style(theme::reversed()), area);
+    area
 }
 
 fn draw_confirm(f: &mut Frame<'_>, body: Rect, p: &Confirm, ui: &Ui<'_>) {

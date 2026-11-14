@@ -3,7 +3,8 @@
 //!
 //! The screen draws a text fallback in the same cells (what the terminal emulator shows) and,
 //! on the panel, marks those cells `CellDiffOption::Skip` so Ratatui leaves the pixels alone.
-//! An overlay always repaints its whole rectangle.
+//! An overlay repaints its whole rectangle, except [`Overlay::Over`], drawn on top of what is
+//! there (the message banner fades the screen under it).
 
 use alloc::string::String;
 use alloc::vec;
@@ -50,6 +51,11 @@ pub enum Overlay {
         at: PixelRect,
         scene: crate::scene::Scene,
     },
+    /// A scene drawn over the pixels already there, without blanking its rectangle first.
+    Over {
+        at: PixelRect,
+        scene: crate::scene::Scene,
+    },
 }
 
 impl Overlay {
@@ -59,7 +65,8 @@ impl Overlay {
             | Overlay::Pin { at, .. }
             | Overlay::Qr { at, .. }
             | Overlay::Map { at, .. }
-            | Overlay::Scene { at, .. } => *at,
+            | Overlay::Scene { at, .. }
+            | Overlay::Over { at, .. } => *at,
         }
     }
 }
@@ -69,6 +76,9 @@ const QR_MAX: Version = Version::new(10);
 
 pub fn draw<D: DrawTarget<Color = BinaryColor>>(o: &Overlay, d: &mut D) -> Result<(), D::Error> {
     let at = o.area();
+    if let Overlay::Over { scene, .. } = o {
+        return crate::scene::draw(scene, Point::new(at.x, at.y), d);
+    }
     at.rect()
         .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
         .draw(d)?;
@@ -77,7 +87,9 @@ pub fn draw<D: DrawTarget<Color = BinaryColor>>(o: &Overlay, d: &mut D) -> Resul
         Overlay::Pin { pin, .. } => pin_digits(at, *pin, d),
         Overlay::Qr { text, .. } => qr(at, text, d),
         Overlay::Map { points, .. } => map(at, points, d),
-        Overlay::Scene { scene, .. } => crate::scene::draw(scene, Point::new(at.x, at.y), d),
+        Overlay::Scene { scene, .. } | Overlay::Over { scene, .. } => {
+            crate::scene::draw(scene, Point::new(at.x, at.y), d)
+        }
     }
 }
 

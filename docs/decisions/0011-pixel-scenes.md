@@ -18,7 +18,8 @@ Tanguy asked for a better-looking interface and chose, on mockups drawn at the p
 - **A screen may return a scene** (`mc_ui::scene::Scene`): a list of pixel primitives. These are text in proportional fonts, icons, boxes with rounded corners, circles, lines and a dither. The app paints it over the screen's body on the panel, in cells it marks skipped, as it already did for the clock and QR codes.
 - **The grid version stays.** It is what the terminal emulator (`mc ui`) and the text snapshots show. Gestures and navigation do not change.
 - **The header and footer of every screen are scenes on the panel**: a black bar with icons, and key caps with the hints.
-- **Pixel screens:** Home, the message list, conversations, compose, the new-message banner and the contact card (U10, U11).
+- **Pixel screens:** Home, the message list, conversations, compose, the new-message banner and the contact card (U10, U11). The contact and channel lists share the message list's rows.
+- **The banner fades what is under it.** An overlay normally blanks its rectangle before drawing; the banner's (`Overlay::Over`) draws over the screen's pixels instead: a dither, then the card.
 - **Fonts and icons come from U8g2 through `u8g2-fonts`:**
   - Helvetica from the X11 fonts, under the Adobe/DEC licence;
   - Spleen 16×32 for big digits, BSD-2-Clause;

@@ -13,11 +13,14 @@ use ratatui_widgets::paragraph::{Paragraph, Wrap};
 
 use super::chat::{Compose, Conversation, Target};
 use super::contact::{ChannelScreen, ContactScreen};
+use super::contact::{kind_name, route_of};
+use super::pixel::{Badge, Dot, Row, initials, rich_list};
 use super::{draw_list, name_of, rows, step};
 use crate::act::Intent;
 use crate::app::{Input, Nav, Screen, Ui};
 use crate::chrome::Footer;
 use crate::clock;
+use crate::scene::{Align, Font, Icon, Scene};
 
 /// What a contact is picked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +81,54 @@ fn sorted(ui: &Ui<'_>) -> Vec<(String, String)> {
 }
 
 impl Screen for Contacts {
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let list = sorted_contacts(ui);
+        if list.is_empty() {
+            let mut sc = Scene::new();
+            sc.text(8, 30, Font::B10, Align::Left, true, "No contacts yet.");
+            sc.text(
+                8,
+                46,
+                Font::R8,
+                Align::Left,
+                true,
+                "They appear when their adverts",
+            );
+            sc.text(8, 57, Font::R8, Align::Left, true, "are heard.");
+            return Some(sc);
+        }
+        let rows_: Vec<Row> = list
+            .iter()
+            .map(|k| {
+                let name = name_of(&k.name);
+                let fav = if k.flags & 1 != 0 {
+                    "Favourite · "
+                } else {
+                    ""
+                };
+                Row {
+                    badge: Some(match k.kind {
+                        2 => Badge::Icon(Icon::Broadcast),
+                        3 => Badge::Icon(Icon::People),
+                        4 => Badge::Icon(Icon::Signal),
+                        _ => Badge::Initials(initials(&name)),
+                    }),
+                    title: name,
+                    bold: false,
+                    right: if k.lastmod == 0 {
+                        String::new()
+                    } else {
+                        clock::ago(k.lastmod, ui.ctx.unix)
+                    },
+                    sub: Some(format!("{fav}{} · {}", kind_name(k.kind), route_of(k))),
+                    dot: Dot::None,
+                }
+            })
+            .collect();
+        let sel = self.state.selected().unwrap_or(0).min(rows_.len() - 1);
+        Some(rich_list(ui, w, h, &rows_, sel))
+    }
+
     fn title(&self, ui: &Ui<'_>) -> String {
         if let Some(p) = self.pick {
             String::from(match p {
@@ -174,6 +225,38 @@ fn channels(ui: &Ui<'_>) -> Vec<(u8, String, String)> {
 }
 
 impl Screen for Channels {
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let hist = ui.ctx.dev.history();
+        let mut rows_ = alloc::vec![Row::action(Icon::Plus, "Add #channel")];
+        for (idx, name, _) in channels(ui) {
+            let peer = Peer::Channel(idx);
+            let unread = hist.unread_with(peer);
+            let muted = ui.ctx.dev.node.prefs.ui.is_muted(idx);
+            let last = hist.with(peer).last();
+            rows_.push(Row {
+                badge: Some(Badge::Hash),
+                title: name,
+                bold: unread > 0,
+                right: last.map_or_else(String::new, |m| clock::ago(m.at, ui.ctx.unix)),
+                sub: Some(match last {
+                    Some(m) if m.outgoing => {
+                        format!("You: {}", String::from_utf8_lossy(&m.text))
+                    }
+                    Some(m) => String::from(String::from_utf8_lossy(&m.text)),
+                    None if muted => String::from("Muted"),
+                    None => String::from("No messages"),
+                }),
+                dot: match (unread, muted) {
+                    (0, _) => Dot::None,
+                    (_, true) => Dot::Muted,
+                    (_, false) => Dot::Unread,
+                },
+            });
+        }
+        let sel = self.state.selected().unwrap_or(0).min(rows_.len() - 1);
+        Some(rich_list(ui, w, h, &rows_, sel))
+    }
+
     fn title(&self, _ui: &Ui<'_>) -> String {
         String::from("Channels")
     }

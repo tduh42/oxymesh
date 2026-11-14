@@ -19,6 +19,8 @@ use super::{Card, draw_list, name_of, rows, short_key, step};
 use crate::act::{Intent, Outcome};
 use crate::app::{Confirm, Input, Nav, Screen, Ui};
 use crate::clock;
+use crate::geo;
+use crate::scene::{self, Align, Font, Icon, IconSize, Scene};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Act {
@@ -31,6 +33,18 @@ enum Act {
     Share,
     Remove,
 }
+
+/// The icons of [`ACTS`], for the tiles.
+const ACT_ICONS: [Icon; 8] = [
+    Icon::Pencil,
+    Icon::Chat,
+    Icon::Broadcast,
+    Icon::Star,
+    Icon::Refresh,
+    Icon::Route,
+    Icon::Qr,
+    Icon::Trash,
+];
 
 const ACTS: [(Act, &str); 8] = [
     (Act::Write, "Write"),
@@ -82,7 +96,7 @@ pub(crate) fn kind_name(kind: u8) -> &'static str {
     }
 }
 
-fn route_of(c: &Contact) -> String {
+pub(crate) fn route_of(c: &Contact) -> String {
     if c.out_path_len == PATH_UNKNOWN {
         return String::from("no route yet");
     }
@@ -98,6 +112,115 @@ impl Screen for ContactScreen {
         self.contact(ui)
             .map(|c| name_of(&c.name))
             .unwrap_or_else(|| String::from("Contact"))
+    }
+
+    /// A card: the badge and name, what is known, then the actions as tiles.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let Some(c) = self.contact(ui) else {
+            sc.text(8, 24, Font::B10, Align::Left, true, "Contact removed.");
+            return Some(sc);
+        };
+        let ctx = ui.ctx;
+        let (wi, hi) = (w as i16, h as i16);
+        let name = name_of(&c.name);
+        // The badge, the name, a star for a favourite.
+        sc.circle(20, 19, 34, true, true);
+        let badge = super::pixel::initials(&name);
+        sc.text(
+            20,
+            19 + Font::B12.ascent() / 2,
+            Font::B12,
+            Align::Center,
+            false,
+            &badge,
+        );
+        let fav = c.flags & 1 != 0;
+        let room = wi - 44 - if fav { 14 } else { 4 };
+        let shown = scene::ellipsize(Font::B12, &name, room);
+        sc.text(44, 16, Font::B12, Align::Left, true, &shown);
+        if fav {
+            let x = 44 + scene::width(Font::B12, &shown) + 4;
+            sc.icon(x, 6, Icon::Star, IconSize::S8, true);
+        }
+        let sub = format!("{} · key {}", kind_name(c.kind), short_key(&c.pub_key));
+        sc.text(
+            44,
+            31,
+            Font::R8,
+            Align::Left,
+            true,
+            &scene::ellipsize(Font::R8, &sub, wi - 46),
+        );
+        // What is known: the route and when it was heard, where it is, the last ping.
+        let mut lines: Vec<(Icon, String)> = Vec::new();
+        let heard = if c.lastmod == 0 {
+            String::from("never heard")
+        } else {
+            format!(
+                "heard {}",
+                clock::stamp(c.lastmod, ctx.unix, ctx.tz_offset_min)
+            )
+        };
+        lines.push((Icon::Route, format!("{} · {heard}", route_of(c))));
+        if let Some(p) = super::tools::position_of(c) {
+            let place = match super::tools::my_position(ui) {
+                Some(me) => format!(
+                    "{} {}",
+                    geo::distance_text(geo::distance_m(me, p)),
+                    geo::compass(geo::bearing_deg(me, p))
+                ),
+                None => format!("{}, {}", geo::coord(p.0, true), geo::coord(p.1, false)),
+            };
+            lines.push((Icon::Pin, place));
+        }
+        if let Some(tag) = self.ping {
+            lines.push((
+                Icon::Signal,
+                match ctx.dev.request_reply(tag) {
+                    Some(r) if r.ok => {
+                        format!("Ping {}.{:02} s", r.rtt_ms / 1000, r.rtt_ms % 1000 / 10)
+                    }
+                    Some(_) => String::from("Ping: no answer"),
+                    None => String::from("Ping: waiting..."),
+                },
+            ));
+        }
+        let mut y = 40i16;
+        for (icon, text) in &lines {
+            sc.icon(4, y, *icon, IconSize::S8, true);
+            let t = scene::ellipsize(Font::R8, text, wi - 20);
+            sc.text(16, y + 7, Font::R8, Align::Left, true, &t);
+            y += 11;
+        }
+        sc.hline(0, wi - 1, y + 1);
+        // The actions, 3 × 3.
+        let top = y + 4;
+        let tw = (w - 8 - 4) / 3;
+        let th = ((hi - top - 4) / 3).clamp(20, 40) as u16;
+        let sel = self.state.selected().unwrap_or(0) % ACTS.len();
+        let unread = ctx.dev.history().unread_with(self.peer());
+        for (i, ((act, label), icon)) in ACTS.iter().zip(ACT_ICONS).enumerate() {
+            let (col, row) = (i as i16 % 3, i as i16 / 3);
+            let label = match act {
+                Act::Favourite if fav => "Unfavourite",
+                Act::Share => "Share",
+                _ => *label,
+            };
+            let count = if *act == Act::Messages { unread } else { 0 };
+            super::pixel::tile(
+                &mut sc,
+                4 + col * (tw as i16 + 2),
+                top + row * (th as i16 + 2),
+                tw,
+                th,
+                icon,
+                label,
+                count,
+                i == sel,
+            );
+        }
+        Some(sc)
     }
 
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {

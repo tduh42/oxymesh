@@ -9,6 +9,8 @@ use std::time::{Duration as StdDuration, Instant as StdInstant};
 
 use mc_core::{Duration, Instant};
 use mc_node::Event;
+use mc_node::device::UiEvent;
+use mc_node::history::Peer;
 use mc_proto::Command;
 use mc_sim::World;
 use mc_ui::app::{App, Ctx, GpsFix};
@@ -297,6 +299,24 @@ fn render_tour(dir: &Path) -> Result<(), String> {
     }
     say_channel(&mut w, 1, "Snow on the pass, take chains");
     w.run(Duration::from_secs(5));
+    // Our own messages, for the outgoing bubbles: one delivered, one on Public.
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
+    let bob_key = *w.nodes[2].dev.node.id.pub_key();
+    for i in [
+        Intent::SendText {
+            key: bob_key,
+            text: String::from("Leaving at 3, see you up there"),
+        },
+        Intent::SendChannel {
+            idx: 0,
+            text: String::from("Thanks! Is the road open?"),
+        },
+    ] {
+        let now = w.now;
+        let sn = &mut w.nodes[ME];
+        let _ = perform(&i, &mut sn.dev, now, &mut rng, &mut sn.st);
+        w.run(Duration::from_secs(5));
+    }
     say(&mut w, 2, "Coffee at the refuge around 4?");
     w.run(Duration::from_secs(5));
     let c = ctx(&w, false, PHONE);
@@ -308,16 +328,41 @@ fn render_tour(dir: &Path) -> Result<(), String> {
             ..PHONE
         },
     );
-    let shots = mc_ui::tour::TOUR.iter().map(|(n, g)| (*n, *g, &c)).chain([(
-        "ble_pairing",
-        &[][..],
-        &pairing,
-    )]);
+    // Bob's direct message, to raise the banner over a pixel screen and a text one.
+    let bob = w.nodes[ME]
+        .dev
+        .history()
+        .iter()
+        .filter(|m| !m.outgoing && matches!(m.peer, Peer::Contact(_)))
+        .last()
+        .map(|m| UiEvent::Message {
+            seq: m.seq,
+            peer: m.peer,
+            outgoing: false,
+        });
+    let a = Button::A;
+    let tools = [
+        Gesture::Click(a),
+        Gesture::Click(a),
+        Gesture::Click(a),
+        Gesture::Long(a),
+    ];
+    let shots = mc_ui::tour::TOUR
+        .iter()
+        .map(|(n, g)| (*n, *g, &c, None))
+        .chain([
+            ("ble_pairing", &[][..], &pairing, None),
+            ("banner_home", &[][..], &c, bob.as_ref()),
+            ("banner_tools", &tools[..], &c, bob.as_ref()),
+        ]);
     for grid in [LARGE, COMPACT] {
-        for (name, gestures, c) in shots.clone() {
+        for (name, gestures, c, event) in shots.clone() {
             let mut app = App::new(grid, true);
             for g in gestures {
                 app.gesture(*g, c);
+            }
+            if let Some(e) = event {
+                app.event(e, c);
             }
             let mut frame = Frame::new();
             {

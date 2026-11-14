@@ -1,0 +1,19 @@
+---
+source: crates/mc-ui/tests/screens.rs
+expression: "text(&mut app, grid, &c)"
+---
+|Public       ●2 18:33 87%|
+|Alice · 18:33            |
+|Snow on the pass, take   |
+|chains                   |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|A▸down hold▸write  B◂back|
