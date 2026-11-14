@@ -21,6 +21,7 @@ Log of tests on the real devices. Each entry: date, setup, command, result.
 - A frame now costs 10-12 ms before the 542 ms partial refresh, on par with U0's 6 ms grid demo plus the header and footer.
 - Heap peak 57,336 of 98,300 B (61,004 B in the first build); stack peak 30,784 of 61,156 B.
 - **Clock chip**: the M5 showed 2026-11-05 17:33, the firmware's floor. The PCF8563 had its VL flag set and counted from 2000-01-01, so it had lost power about 1 h 40 min before, with the battery at 4.1 V. The firmware rightly ignores such a time. `mc time` (new: SET_DEVICE_TIME only, nothing on air) set the clock, the M5 wrote it back, and VL cleared. The cause of the power loss is not known; the M5 has no separate cell for the chip. The `debug-log` status line now shows the chip's state.
+- **Typing (U11)**: a long A that inserts (a new prediction over the ~4,000 words) takes about 9 ms on the M5, a click 0.17 ms; heap peak 72,952 B while typing, with a phone connected. The first try on the device found that presses held past 1 s moved on instead of validating; a held A now validates once in the keyboard.
 - **GPS**: indoors, 0 satellites for several minutes after boot, with sentences flowing (about 340 B/s, no errors), as on 2026-11-08. No fix has been seen on this M5 yet: it needs a test with sky in view.
 
 ## 2026-11-10 — the repeater and the room server on the M5 (S1d, S2)
