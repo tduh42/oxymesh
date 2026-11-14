@@ -3,9 +3,10 @@
 //! Fed with raw press/release edges and a millisecond clock, it emits gestures:
 //! - `Click`: press shorter than 600 ms, not followed by a second press within 300 ms;
 //! - `Double`: two short presses within 300 ms;
-//! - `Long`: released after 600 ms (and, for A, before auto-repeat starts at 1 s);
-//! - `Held`: while a button stays down past 1 s, one tick every 250 ms (lists scroll on it,
-//!   hold-to-confirm dialogs count it down), then `HeldEnd` on release (A only).
+//! - `Long`: released after 600 ms (and, for A, before the held ticks start at 1 s);
+//! - `Held`: while a button stays down past 1 s, one tick every 250 ms (the app takes the first
+//!   as a long press, hold-to-confirm dialogs count them down), then `HeldEnd` on release (A
+//!   only).
 //!
 //! Pure and `no_std`: the same code runs on the device, in the emulator and in tests.
 
@@ -141,7 +142,7 @@ impl Gestures {
                         }
                     }
                 } else {
-                    // A auto-repeats once held past 1 s: its release then only ends the hold.
+                    // A ticks once held past 1 s: its release then only ends the hold.
                     emit = Some(if button == Button::B || ticks == 0 {
                         Gesture::Long(button)
                     } else {

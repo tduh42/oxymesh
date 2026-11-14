@@ -180,25 +180,68 @@ fn advert_from_identity_shows_a_toast() {
 }
 
 #[test]
-fn lists_wrap_and_hold_scrolls_faster() {
+fn lists_wrap_and_a_hold_opens_once() {
     let w = world();
     let c = ctx(&w);
     let mut app = App::new(LARGE, false);
     // Home launcher: previous from the first row is the last row (Settings).
-    press(&mut app, &c, &[Double(A), Long(A)]);
-    assert!(text(&mut app, LARGE, &c).starts_with("|Settings"));
-    press(&mut app, &c, &[Double(B)]);
-    // Held 2 s and more: two rows per tick.
+    press(&mut app, &c, &[Double(A)]);
+    // Held: Settings opens once; the later ticks open nothing inside it.
     press(
         &mut app,
         &c,
-        &[Held(A, 1000), Held(A, 2000), HeldEnd(A), Long(A)],
+        &[
+            Held(A, 1000),
+            Held(A, 1250),
+            Held(A, 2000),
+            Held(A, 4500),
+            HeldEnd(A),
+        ],
     );
-    // Home kept its cursor on Settings (4): 4 + 1 + 2 wraps to Channels (2).
-    assert!(
-        text(&mut app, LARGE, &c).starts_with("|Channels"),
-        "1 + 2 rows down"
+    let screen = text(&mut app, LARGE, &c);
+    assert!(screen.starts_with("|Settings"), "{screen}");
+    // Back once: Home.
+    press(&mut app, &c, &[Click(B)]);
+    assert!(!text(&mut app, LARGE, &c).starts_with("|Settings"));
+}
+
+/// The hold that opens a hold-to-confirm popup never confirms it, however long it lasts; a
+/// new hold does, and what is left of it does nothing more.
+#[test]
+fn a_hold_never_confirms_the_popup_it_opened() {
+    let w = world();
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, false);
+    // Settings → System → Reboot, opened by holding.
+    press(
+        &mut app,
+        &c,
+        &[Double(A), Long(A), Double(A), Long(A), Click(A), Click(A)],
     );
+    let got = press(
+        &mut app,
+        &c,
+        &[
+            Held(A, 1000),
+            Held(A, CONFIRM_MS),
+            Held(A, 5000),
+            HeldEnd(A),
+        ],
+    );
+    assert!(got.is_empty(), "{got:?}");
+    assert!(app.popup().is_some());
+    let got = press(
+        &mut app,
+        &c,
+        &[
+            Held(A, 1000),
+            Held(A, CONFIRM_MS),
+            Held(A, 3000),
+            HeldEnd(A),
+        ],
+    );
+    assert_eq!(got, vec![Intent::Reboot]);
+    assert!(app.popup().is_none());
 }
 
 /// On the panel, leaving Home must not leave clock pixels behind: the frame after Home → Tools

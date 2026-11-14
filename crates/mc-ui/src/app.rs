@@ -164,11 +164,6 @@ pub trait Screen: core::fmt::Debug {
     fn keyboard(&self) -> Option<&Keyboard> {
         None
     }
-    /// A held A acts as one long press instead of repeating "next" (text entry: holding
-    /// to validate is the natural gesture, and its ring is short).
-    fn hold_opens(&self) -> bool {
-        false
-    }
     /// Called regularly while the screen is shown (the range test sends its pings here).
     fn tick(&mut self, _ui: &Ui<'_>) -> Nav {
         Nav::Stay
@@ -212,8 +207,8 @@ pub struct App {
     toast: Option<(String, u64)>,
     /// A received message not seen yet: its history entry.
     banner: Option<u32>,
-    /// The current hold of A already acted (`Screen::hold_opens`): its other ticks are dropped.
-    hold_done: bool,
+    /// What the current hold of A is for: it acts once, then its other ticks are dropped.
+    hold: HoldUse,
     intents: Vec<Intent>,
     grid: Grid,
     /// Drawing for the panel: overlays are painted, their cells skipped by Ratatui.
@@ -230,7 +225,7 @@ impl App {
             popup: None,
             toast: None,
             banner: None,
-            hold_done: false,
+            hold: HoldUse::Free,
             intents: Vec::new(),
             grid,
             panel,
@@ -387,8 +382,21 @@ impl App {
     /// A gesture.
     pub fn gesture(&mut self, g: Gesture, ctx: &Ctx<'_>) {
         self.dirty = true;
-        if g == Gesture::HeldEnd(Button::A) {
-            self.hold_done = false;
+        let mut g = g;
+        // A held A is a long press, once (holding is how people validate). A hold-to-confirm
+        // popup counts only a hold that started on it: the one that opened it never confirms.
+        match g {
+            Gesture::HeldEnd(Button::A) => self.hold = HoldUse::Free,
+            Gesture::Held(Button::A, _) => match (self.hold, self.popup.is_some()) {
+                (HoldUse::Free, false) => {
+                    self.hold = HoldUse::Screen;
+                    g = Gesture::Long(Button::A);
+                }
+                (HoldUse::Free, true) => self.hold = HoldUse::Popup,
+                (HoldUse::Popup, true) => {}
+                _ => return,
+            },
+            _ => {}
         }
         if g == Gesture::Long(Button::B) {
             self.intents.push(Intent::ToggleLight);
@@ -466,32 +474,10 @@ impl App {
             }
             return;
         }
-        if let Gesture::Held(Button::A, _) = g {
-            if self.hold_done {
-                return;
-            }
-            if self.stack.last().is_some_and(|s| s.hold_opens()) {
-                // Once per hold, even if the press changes the screen (Send).
-                self.hold_done = true;
-                let ui = make_ui(self.grid, ctx);
-                let nav = match self.stack.last_mut() {
-                    Some(s) => s.input(Input::Open, &ui),
-                    None => Nav::Stay,
-                };
-                self.apply(nav, ctx);
-                return;
-            }
-        }
         let input = match g {
             Gesture::Click(Button::A) => Input::Next(1),
             Gesture::Double(Button::A) => Input::Prev,
             Gesture::Long(Button::A) => Input::Open,
-            // Faster after 2 s and 4 s of holding.
-            Gesture::Held(Button::A, ms) => Input::Next(match ms {
-                0..2_000 => 1,
-                2_000..4_000 => 2,
-                _ => 4,
-            }),
             _ => return,
         };
         let ui = make_ui(self.grid, ctx);
@@ -708,6 +694,17 @@ impl App {
         self.screen_changed = true;
         self.dirty = true;
     }
+}
+
+/// Who the current hold of A belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoldUse {
+    /// No hold, or none that acted yet.
+    Free,
+    /// It acted as a long press on the screen; the rest of it is dropped.
+    Screen,
+    /// It started on a hold-to-confirm popup and counts towards it.
+    Popup,
 }
 
 /// Cells the panel leaves to an overlay.
