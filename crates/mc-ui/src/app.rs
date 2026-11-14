@@ -164,6 +164,11 @@ pub trait Screen: core::fmt::Debug {
     fn keyboard(&self) -> Option<&Keyboard> {
         None
     }
+    /// A held A acts as one long press instead of repeating "next" (text entry: holding
+    /// to validate is the natural gesture, and its ring is short).
+    fn hold_opens(&self) -> bool {
+        false
+    }
     /// Called regularly while the screen is shown (the range test sends its pings here).
     fn tick(&mut self, _ui: &Ui<'_>) -> Nav {
         Nav::Stay
@@ -207,6 +212,8 @@ pub struct App {
     toast: Option<(String, u64)>,
     /// A received message not seen yet: its history entry.
     banner: Option<u32>,
+    /// The current hold of A already acted (`Screen::hold_opens`): its other ticks are dropped.
+    hold_done: bool,
     intents: Vec<Intent>,
     grid: Grid,
     /// Drawing for the panel: overlays are painted, their cells skipped by Ratatui.
@@ -223,6 +230,7 @@ impl App {
             popup: None,
             toast: None,
             banner: None,
+            hold_done: false,
             intents: Vec::new(),
             grid,
             panel,
@@ -379,6 +387,9 @@ impl App {
     /// A gesture.
     pub fn gesture(&mut self, g: Gesture, ctx: &Ctx<'_>) {
         self.dirty = true;
+        if g == Gesture::HeldEnd(Button::A) {
+            self.hold_done = false;
+        }
         if g == Gesture::Long(Button::B) {
             self.intents.push(Intent::ToggleLight);
             return;
@@ -454,6 +465,22 @@ impl App {
                 _ => {}
             }
             return;
+        }
+        if let Gesture::Held(Button::A, _) = g {
+            if self.hold_done {
+                return;
+            }
+            if self.stack.last().is_some_and(|s| s.hold_opens()) {
+                // Once per hold, even if the press changes the screen (Send).
+                self.hold_done = true;
+                let ui = make_ui(self.grid, ctx);
+                let nav = match self.stack.last_mut() {
+                    Some(s) => s.input(Input::Open, &ui),
+                    None => Nav::Stay,
+                };
+                self.apply(nav, ctx);
+                return;
+            }
         }
         let input = match g {
             Gesture::Click(Button::A) => Input::Next(1),

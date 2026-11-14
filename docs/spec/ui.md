@@ -30,6 +30,7 @@ Source of truth for `mc-ui`. On-screen text **in English**. 200×200 black and w
 | **A** (GPIO21, bottom) | next / down | previous / up | open, select, confirm | repeats "next", faster after 2 s and 4 s |
 | **B** (GPIO14, top) | back (nothing on Home) | Home from anywhere | backlight on / off | — |
 
+- In text entry a hold does not repeat: it acts as one long press at 1 s (holding to validate is the natural gesture), and the rest of that hold is dropped, even when the press closed the keyboard.
 - Recognizer (`mc_ui::input`): 30 ms debounce; a click is reported once the 300 ms double-click window has passed; a long press is reported on release; while held, a tick every 250 ms from 1 s on. A released after it started repeating does not also open.
 - Lists wrap: "next" on the last row goes to the first, "previous" on the first goes to the last.
 - **Hold-to-confirm** for dangerous or outgoing actions (factory reset, remove contact, flood advert, region change): a popup asks to hold A for 2 s and shows the time left; releasing early cancels.

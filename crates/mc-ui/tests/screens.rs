@@ -602,3 +602,39 @@ fn conversations_scroll_in_pixels() {
         assert_eq!(body_texts(&app), newest);
     }
 }
+
+/// In text entry a hold past the long press acts once as a long press; its later ticks do
+/// nothing, even after the press changed the screen.
+#[test]
+fn holding_a_in_the_keyboard_inserts_once() {
+    let w = world();
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, false);
+    // Messages, Bob, write: the first stop is the first quick reply, "OK".
+    press(&mut app, &c, &[Long(A), Click(A), Long(A), Long(A)]);
+    text(&mut app, LARGE, &c);
+    assert_eq!(app.keyboard().unwrap().text, "");
+    press(
+        &mut app,
+        &c,
+        &[Held(A, 1000), Held(A, 1250), Held(A, 1500), HeldEnd(A)],
+    );
+    let kb = app.keyboard().unwrap();
+    assert_eq!(kb.text, "OK", "one insertion");
+    assert_eq!(kb.selected(), Some(&mc_ui::keyboard::Cand::Done));
+    // Held again on Send: sent once, and the conversation underneath does not scroll.
+    let intents = press(
+        &mut app,
+        &c,
+        &[Held(A, 1000), Held(A, 1250), Held(A, 2500), HeldEnd(A)],
+    );
+    assert!(app.keyboard().is_none(), "back on the conversation");
+    assert_eq!(
+        intents
+            .iter()
+            .filter(|i| matches!(i, Intent::SendText { .. }))
+            .count(),
+        1,
+        "{intents:?}"
+    );
+}
