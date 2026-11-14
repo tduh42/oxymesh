@@ -1,0 +1,24 @@
+---
+source: crates/mc-ui/tests/screens.rs
+expression: "text(&mut app, grid, &c)"
+---
+|Contacts             ●2 18:33 87%|
+|► Add                         all|
+|  Chat                        off|
+|  Repeater                    off|
+|  Room                        off|
+|  Sensor                      off|
+|  When full                  keep|
+|  Max hops               no limit|
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|A►next hold►open           B◄back|

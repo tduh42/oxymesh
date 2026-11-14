@@ -1,0 +1,24 @@
+---
+source: crates/mc-ui/tests/screens.rs
+expression: "text(&mut app, grid, &c)"
+---
+|Packets 5            ●2 18:33 87%|
+|► 18:33 PATH D0           10.0 dB|
+|  18:33 TXT  F0           10.0 dB|
+|  18:33 GTXT F0           10.0 dB|
+|  18:33 ADV  D0           10.0 dB|
+|  18:33 ADV  D0           10.0 dB|
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|A►next                     B◄back|

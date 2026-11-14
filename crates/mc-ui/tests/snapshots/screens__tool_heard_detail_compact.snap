@@ -1,0 +1,24 @@
+---
+source: crates/mc-ui/tests/screens.rs
+expression: "text(&mut app, grid, &c)"
+---
+|Bob                  ●2 18:33 87%|
+|Type                         Chat|
+|Key                      b4744035|
+|Route                      direct|
+|Signal               ▂▄▆█ 10.0 dB|
+|Heard                      1 time|
+|Last                        18:33|
+|                                 |
+|In your contacts.                |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                                 |
+|                           B◄back|
