@@ -129,6 +129,10 @@ enum Cmd {
     Time { port: String },
     /// When the device last heard each contact (their `lastmod`), as counts per hour; no names.
     Heard { port: String },
+    /// The device's telemetry permissions byte (SELF_INFO), or set it (SET_OTHER_PARAMS, the
+    /// other fields kept): bits 0-1 base, 2-3 location, 4-5 environment; 0 nobody, 1
+    /// favourites, 2 everyone.
+    Telemetry { port: String, value: Option<String> },
     /// The device's transmit power (SELF_INFO), or set it in dBm (SET_RADIO_TX_POWER).
     TxPower {
         port: String,
@@ -233,6 +237,7 @@ fn main() {
         Cmd::Time { port } => set_time(&port),
         Cmd::Heard { port } => heard_times(&port),
         Cmd::TxPower { port, dbm } => tx_power(&port, dbm),
+        Cmd::Telemetry { port, value } => telemetry(&port, value.as_deref()),
         Cmd::Advert { port, flood } => advert(&port, flood),
         Cmd::Inbox { port } => inbox(&port),
         Cmd::Spiffs { image } => spiffs(&image),
@@ -440,6 +445,34 @@ fn advert(path: &str, flood: bool) -> Result<(), String> {
         unix_s: crate::port::now_unix(),
     })?;
     p.ask(&Command::SendSelfAdvert { flood: Some(flood) })?;
+    Ok(())
+}
+
+fn telemetry(path: &str, value: Option<&str>) -> Result<(), String> {
+    let mut p = Port::open(path, "device")?;
+    p.verbose = true;
+    p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
+    let f = p.ask(&Command::AppStart {
+        reserved: [0; 7],
+        app_name: b"mc",
+    })?;
+    let Ok(Response::SelfInfo(si)) = Response::decode(&f) else {
+        return Err("no SELF_INFO".into());
+    };
+    if let Some(v) = value {
+        let v = v.trim_start_matches("0x");
+        let t = u8::from_str_radix(v, 16).map_err(|e| format!("telemetry: {e}"))?;
+        p.ask(&Command::SetOtherParams {
+            manual_add: si.manual_add,
+            telemetry: Some(t),
+            advert_loc_policy: Some(si.advert_loc_policy),
+            multi_acks: Some(si.multi_acks),
+        })?;
+        p.ask(&Command::AppStart {
+            reserved: [0; 7],
+            app_name: b"mc",
+        })?;
+    }
     Ok(())
 }
 
