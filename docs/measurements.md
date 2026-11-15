@@ -2,6 +2,22 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-15 — reliability soak (R4): 100 rounds against the C++ Heltec
+
+- Setup: `mc-m5` release build (the event-driven loop, P1) on the M5 over USB, the C++ Heltec V4 (2ABEBB3D) beside it, a phone connected to the M5 over Bluetooth part of the time. `mc soak --a <M5> --b <Heltec> --runs 100`: both ports kept open, and nothing reads a message queue (the Heltec's holds real messages, the M5's is the phone's): zero-hop adverts both ways (heard), a DM Heltec → M5 (delivery acknowledged; the 100 test DMs stayed queued for the phone), a telemetry ping each way, the M5's uptime every round.
+- **500/500 checks, no restart**, 927 s:
+
+| Check | Result | min / median / max |
+|---|---|---|
+| M5 advert heard by the Heltec | 100/100 | |
+| Heltec advert heard by the M5 | 100/100 | |
+| Heltec → M5 DM acknowledged | 100/100 | 978 / 984 / 1081 ms |
+| M5 → Heltec ping | 100/100 | 1051 / 1088 / 1230 ms |
+| Heltec → M5 ping | 100/100 | 1009 / 1015 / 1025 ms |
+
+- The 4-in-26 restarts and broken ports of 2026-11-09 did not recur (that was the 1 ms polling loop, before P1).
+- Found on the way: with a phone connected, the M5 mirrors the phone's replies to USB (deviation 10), so a tool that takes the first reply can read the phone's. `mc soak` waits for its own reply type. Telemetry permissions are opened for the pings and set back (the Heltec back at 0x00).
+
 ## 2026-11-15 — the M5 heard nothing at the desk: local radio noise
 
 - Symptom: Public channel messages on the C++ Heltec, not on the M5 companion. Overnight the Heltec heard adverts from about 80 nodes (`mc heard`: its contacts' last-heard times per hour); the M5 beside it, on USB, delivered no packet to its node in 15.8 h. It still heard the Heltec 30 cm away.

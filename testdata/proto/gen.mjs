@@ -353,7 +353,7 @@ okr("end-of-contacts", cat(0x04, u32(T - 30)), `END_OF_CONTACTS lastmod=${T - 30
 assert.equal((await jsDecode(cat(0x04, u32(T - 30)))).mostRecentLastmod, T - 30);
 const selfInfo = cat(0x05, 1, 22, 22, K1, i32(0), i32(0), 0, 0, 0, 0, u32(869618), u32(62500), 8, 8, Buffer.from("MeshCore-cddf"));
 okr("self-info", selfInfo,
-  `SELF_INFO type=1 tx=22/22 key=${hex(K1)} lat=0 lon=0 manual_add=0 freq=869618kHz bw=62500Hz sf=8 cr=8 name="MeshCore-cddf"`);
+  `SELF_INFO type=1 tx=22/22 key=${hex(K1)} lat=0 lon=0 manual_add=0 telemetry=0x00 freq=869618kHz bw=62500Hz sf=8 cr=8 name="MeshCore-cddf"`);
 {
   const v = await jsDecode(selfInfo);
   same(v.publicKey, K1, "SELF_INFO key");

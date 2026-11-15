@@ -135,6 +135,7 @@ cargo run --release -p mc-cli -- log <port> --secs 30        # what a debug-log 
 cargo run --release -p mc-cli -- spiffs <image>             # what the C++ firmware left in a SPIFFS image (espflash read-flash 0x290000 0x160000; keep it out of git)
 python3 -I testdata/spiffs/gen.py                           # the made-up C++ SPIFFS test images (cpp.bin, cpp-repeater.bin)
 cargo run --release -p mc-cli -- duo --a $M5 --b $REF   # two companions talk (adverts, DMs, channel, pings), zero-hop; --flood for more
+cargo run --release -p mc-cli -- soak --a $M5 --b $REF --runs 100   # long soak that never reads a message queue (adverts, B→A DMs acknowledged, pings, A's restarts)
 ```
 
 Hardware setup: a Heltec V4 running MeshCore C++ v1.18 over USB as the reference (`/dev/cu.usbmodem*` on macOS), the ThinkNode M5 on `/dev/cu.wchusbserial*` (CH340 bridge; on macOS the WCH driver). The numbers change whenever USB re-enumerates: check `ls /dev/cu.*` first.

@@ -864,7 +864,7 @@ dump = "END_OF_CONTACTS lastmod=1792999970"
 name = "self-info"
 hex = "05011616101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f000000000000000000000000f2440d0024f4000008084d657368436f72652d63646466"
 expect = "ok"
-dump = "SELF_INFO type=1 tx=22/22 key=101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f lat=0 lon=0 manual_add=0 freq=869618kHz bw=62500Hz sf=8 cr=8 name=\"MeshCore-cddf\""
+dump = "SELF_INFO type=1 tx=22/22 key=101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f lat=0 lon=0 manual_add=0 telemetry=0x00 freq=869618kHz bw=62500Hz sf=8 cr=8 name=\"MeshCore-cddf\""
 
 [[response]]
 name = "sent"

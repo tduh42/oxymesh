@@ -793,3 +793,228 @@ pub fn burst(
         Err("losses".into())
     }
 }
+
+/// Sends `cmd` and waits for the reply `pred` recognises. With a phone connected to the same
+/// device its replies also reach USB (deviation 10): the first reply is not necessarily ours.
+fn ask_for<T>(
+    p: &mut Port,
+    cmd: &Command<'_>,
+    pred: impl FnMut(&Response<'_>) -> Option<T>,
+) -> Result<T, String> {
+    let _ = p.drain();
+    p.send(cmd)?;
+    p.wait(5, pred).map_err(|e| format!("{cmd}: {e}"))
+}
+
+fn is_ok(r: &Response<'_>) -> Option<()> {
+    matches!(r, Response::Ok).then_some(())
+}
+
+/// Allows base telemetry for everyone on `p` (so the other side's pings get answers), or sets
+/// `telemetry` back.
+fn open_telemetry(p: &mut Peer, telemetry: Option<u8>) -> Result<(), String> {
+    let (manual, tele, loc, multi) = p.other;
+    let t = telemetry.unwrap_or((tele & !3) | 2);
+    ask_for(
+        &mut p.port,
+        &Command::SetOtherParams {
+            manual_add: manual,
+            telemetry: Some(t),
+            advert_loc_policy: Some(loc),
+            multi_acks: Some(multi),
+        },
+        is_ok,
+    )
+}
+
+/// One telemetry ping `from` → `to`: the round trip in ms.
+fn ping(from: &mut Peer, to: &Peer) -> Result<u128, String> {
+    let t0 = Instant::now();
+    ask_for(
+        &mut from.port,
+        &Command::SendTelemetryReq {
+            reserved: [0; 3],
+            key: Some(to.key),
+        },
+        |r| matches!(r, Response::Sent { .. }).then_some(()),
+    )?;
+    let prefix = to.prefix();
+    from.port.wait(10, |r| match r {
+        Response::TelemetryResponse { prefix: p, .. } if *p == prefix => Some(()),
+        _ => None,
+    })?;
+    Ok(t0.elapsed().as_millis())
+}
+
+/// A direct message `from` → `to`, confirmed by the sender's `SEND_CONFIRMED` only: the
+/// receiver's queue is never read (it may hold someone's real messages).
+fn dm_acked(from: &mut Peer, to: &Peer, text: &str) -> Result<u128, String> {
+    let t0 = Instant::now();
+    let ack = ask_for(
+        &mut from.port,
+        &Command::SendTxtMsg {
+            txt_type: 0,
+            attempt: 0,
+            timestamp: now_unix(),
+            prefix: to.prefix(),
+            text: text.as_bytes(),
+        },
+        |r| match r {
+            Response::Sent { ack, .. } => Some(*ack),
+            _ => None,
+        },
+    )?;
+    from.port.wait(15, |r| match r {
+        Response::SendConfirmed { ack: a, .. } if *a == ack => Some(()),
+        _ => None,
+    })?;
+    Ok(t0.elapsed().as_millis())
+}
+
+/// The device's uptime, from `GET_STATS` core.
+fn uptime(p: &mut Port) -> Option<u32> {
+    ask_for(p, &Command::GetStats { kind: 0 }, |r| match r {
+        Response::Stats(mc_proto::response::Stats::Core { uptime_s, .. }) => Some(*uptime_s),
+        _ => None,
+    })
+    .ok()
+}
+
+/// A zero-hop advert `from` → `to`, heard by `to` (matched replies, see [`ask_for`]).
+fn advert_heard(from: &mut Peer, to: &mut Peer) -> Result<(), String> {
+    let _ = to.port.drain();
+    ask_for(
+        &mut from.port,
+        &Command::SendSelfAdvert { flood: Some(false) },
+        is_ok,
+    )?;
+    let key = from.key;
+    to.port.wait(10, |r| match r {
+        Response::Advert { key: k } if *k == key => Some(()),
+        Response::NewAdvert(c) if c.key == key => Some(()),
+        _ => None,
+    })
+}
+
+/// `mc soak`: `runs` rounds between A (the device under test) and B, both ports kept open, and
+/// nothing that reads a message queue: zero-hop adverts both ways (heard), a DM from B to A
+/// (delivery acknowledged), a telemetry ping each way; A's uptime is checked every round, so a
+/// restart shows. B's DMs stay queued on A for its app.
+pub fn soak(a_path: &str, b_path: &str, runs: u32, verbose: bool) -> Result<(), String> {
+    let mut a = open(a_path, "A", verbose)?;
+    let mut b = open(b_path, "B", verbose)?;
+    if a.key == b.key {
+        return Err("both ports reach the same device".into());
+    }
+    // Late replies to a repeated DEVICE_QUERY (a device still booting) would answer the next
+    // command: let them come, then drop them.
+    std::thread::sleep(Duration::from_secs(2));
+    let _ = a.port.drain();
+    let _ = b.port.drain();
+    a.before = get_contact(&mut a.port, &b.key)?;
+    b.before = get_contact(&mut b.port, &a.key)?;
+    // Each side learns the other, on a zero-hop route; both answer pings.
+    advert(&mut a, &mut b)?;
+    advert(&mut b, &mut a)?;
+    let (ak, bk) = (a.key, b.key);
+    for (p, other) in [(&mut a, bk), (&mut b, ak)] {
+        let c = get_contact(&mut p.port, &other)?
+            .ok_or_else(|| format!("{}: the other device is not a contact", p.label))?;
+        put_contact(&mut p.port, &other, &c, 0)?;
+    }
+    open_telemetry(&mut a, None)?;
+    open_telemetry(&mut b, None)?;
+    std::thread::sleep(Duration::from_secs(3));
+    let names = [
+        "A advert heard by B",
+        "B advert heard by A",
+        "B → A DM acknowledged",
+        "A → B ping",
+        "B → A ping",
+    ];
+    let mut tally = [(0u32, 0u32); 5];
+    let mut times: [Vec<u128>; 3] = Default::default();
+    let mut restarts = Vec::new();
+    let mut last_up = uptime(&mut a.port).unwrap_or(0);
+    let t_start = Instant::now();
+    for run in 1..=runs {
+        let mut line = Vec::new();
+        let results: [Result<Option<u128>, String>; 5] = [
+            advert_heard(&mut a, &mut b).map(|()| None),
+            advert_heard(&mut b, &mut a).map(|()| None),
+            dm_acked(&mut b, &a, &format!("oxymesh soak {run}/{runs}")).map(Some),
+            ping(&mut a, &b).map(Some),
+            ping(&mut b, &a).map(Some),
+        ];
+        for (i, r) in results.iter().enumerate() {
+            match r {
+                Ok(t) => {
+                    tally[i].0 += 1;
+                    if let (Some(t), Some(v)) = (t, times.get_mut(i.saturating_sub(2))) {
+                        v.push(*t);
+                    }
+                }
+                Err(e) => {
+                    tally[i].1 += 1;
+                    line.push(format!("{} FAILED: {e}", names[i]));
+                }
+            }
+        }
+        match uptime(&mut a.port) {
+            Some(up) if up + 2 < last_up => {
+                restarts.push(format!(
+                    "run {run}: A restarted (uptime {last_up} s → {up} s)"
+                ));
+                line.push(format!("A RESTARTED (uptime {last_up} → {up} s)"));
+                last_up = up;
+            }
+            Some(up) => last_up = up,
+            None => line.push("A did not answer GET_STATS".into()),
+        }
+        println!(
+            "run {run:>3}/{runs} {:>5} s: {}",
+            t_start.elapsed().as_secs(),
+            if line.is_empty() {
+                "ok".into()
+            } else {
+                line.join("; ")
+            }
+        );
+    }
+    let (ta, tb) = (a.other.1, b.other.1);
+    let _ = open_telemetry(&mut a, Some(ta));
+    let _ = open_telemetry(&mut b, Some(tb));
+    restore(&mut a, &mut b);
+    println!("\n{runs} runs in {} s:", t_start.elapsed().as_secs());
+    for (i, n) in names.iter().enumerate() {
+        let (ok, ko) = tally[i];
+        let t = i
+            .checked_sub(2)
+            .and_then(|j| times.get(j))
+            .filter(|v| !v.is_empty());
+        let timing = t.map_or(String::new(), |v| {
+            let mut s = v.clone();
+            s.sort_unstable();
+            format!(
+                ", ms min {} / median {} / max {}",
+                s[0],
+                s[s.len() / 2],
+                s[s.len() - 1]
+            )
+        });
+        println!("  {n}: {ok}/{} ok{timing}", ok + ko);
+    }
+    println!("  A restarts: {}", restarts.len());
+    for r in &restarts {
+        println!("    {r}");
+    }
+    let failed: u32 = tally.iter().map(|t| t.1).sum();
+    if failed == 0 && restarts.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{failed} failed checks, {} restarts",
+            restarts.len()
+        ))
+    }
+}

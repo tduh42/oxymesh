@@ -1124,7 +1124,7 @@ impl fmt::Display for Response<'_> {
             Response::EndOfContacts { lastmod } => write!(f, "END_OF_CONTACTS lastmod={lastmod}"),
             Response::SelfInfo(s) => write!(
                 f,
-                "SELF_INFO type={} tx={}/{} key={} lat={} lon={} manual_add={} freq={}kHz bw={}Hz sf={} cr={} name={}",
+                "SELF_INFO type={} tx={}/{} key={} lat={} lon={} manual_add={} telemetry={:#04x} freq={}kHz bw={}Hz sf={} cr={} name={}",
                 s.adv_type,
                 s.tx_power,
                 s.max_tx_power,
@@ -1132,6 +1132,7 @@ impl fmt::Display for Response<'_> {
                 s.lat,
                 s.lon,
                 s.manual_add,
+                s.telemetry,
                 s.freq_khz,
                 s.bw_hz,
                 s.sf,

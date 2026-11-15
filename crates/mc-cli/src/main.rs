@@ -170,6 +170,18 @@ enum Cmd {
         board: String,
     },
     /// Two companions talk to each other (adverts, DMs, channel, pings), zero-hop unless `--flood`.
+    /// A long soak between A (device under test) and B that never reads a message queue:
+    /// adverts both ways, a DM from B to A (acknowledged), a ping each way; A's restarts counted.
+    Soak {
+        #[arg(long)]
+        a: String,
+        #[arg(long)]
+        b: String,
+        #[arg(long, default_value_t = 100)]
+        runs: u32,
+        #[arg(short, long)]
+        verbose: bool,
+    },
     Duo {
         #[arg(long)]
         a: String,
@@ -245,6 +257,12 @@ fn main() {
             png,
             board,
         } => ui::run(compact, png.as_deref(), &board),
+        Cmd::Soak {
+            a,
+            b,
+            runs,
+            verbose,
+        } => duo::soak(&a, &b, runs, verbose),
         Cmd::Duo {
             a,
             b,
