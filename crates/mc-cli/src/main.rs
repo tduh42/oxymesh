@@ -127,6 +127,14 @@ enum Cmd {
     },
     /// Set the device's clock to this computer's (SET_DEVICE_TIME), nothing sent over the air.
     Time { port: String },
+    /// When the device last heard each contact (their `lastmod`), as counts per hour; no names.
+    Heard { port: String },
+    /// The device's transmit power (SELF_INFO), or set it in dBm (SET_RADIO_TX_POWER).
+    TxPower {
+        port: String,
+        #[arg(allow_hyphen_values = true)]
+        dbm: Option<i8>,
+    },
     /// Make the device send its advert (zero hop unless `--flood`).
     Advert {
         port: String,
@@ -202,6 +210,8 @@ fn main() {
         } => sniff(&port, secs, &channel),
         Cmd::Inject { port, hex, prio } => inject(&port, &hex, prio),
         Cmd::Time { port } => set_time(&port),
+        Cmd::Heard { port } => heard_times(&port),
+        Cmd::TxPower { port, dbm } => tx_power(&port, dbm),
         Cmd::Advert { port, flood } => advert(&port, flood),
         Cmd::Inbox { port } => inbox(&port),
         Cmd::Spiffs { image } => spiffs(&image),
@@ -390,6 +400,61 @@ fn advert(path: &str, flood: bool) -> Result<(), String> {
         unix_s: crate::port::now_unix(),
     })?;
     p.ask(&Command::SendSelfAdvert { flood: Some(flood) })?;
+    Ok(())
+}
+
+fn tx_power(path: &str, dbm: Option<i8>) -> Result<(), String> {
+    let mut p = Port::open(path, "device")?;
+    p.verbose = true;
+    p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
+    if let Some(d) = dbm {
+        p.ask(&Command::SetRadioTxPower { dbm: d })?;
+    }
+    p.ask(&Command::AppStart {
+        reserved: [0; 7],
+        app_name: b"mc",
+    })?;
+    Ok(())
+}
+
+fn heard_times(path: &str) -> Result<(), String> {
+    let mut p = Port::open(path, "device")?;
+    p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
+    p.send(&Command::GetContacts { since: None })?;
+    let mut times: Vec<(u8, u32)> = Vec::new();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut done = false;
+    while !done && std::time::Instant::now() < end {
+        for f in p.drain()? {
+            match Response::decode(&f) {
+                Ok(Response::Contact(c)) => times.push((c.kind, c.lastmod)),
+                Ok(Response::EndOfContacts { .. }) => done = true,
+                _ => {}
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let now = crate::port::now_unix();
+    println!("{} contacts; now {now}", times.len());
+    let mut by_hour: std::collections::BTreeMap<u32, [u32; 5]> = Default::default();
+    for (kind, t) in &times {
+        if *t + 48 * 3600 >= now && *t <= now + 600 {
+            by_hour.entry(t / 3600).or_default()[usize::from((*kind).min(4))] += 1;
+        }
+    }
+    for (h, k) in by_hour {
+        let hh = (h % 24, h * 3600);
+        println!(
+            "{:>10} {:02}h UTC: {} heard (chat {}, repeater {}, room {}, sensor {})",
+            hh.1,
+            hh.0,
+            k.iter().sum::<u32>(),
+            k[1],
+            k[2],
+            k[3],
+            k[4]
+        );
+    }
     Ok(())
 }
 

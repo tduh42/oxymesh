@@ -2,6 +2,16 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-15 — the M5 heard nothing at the desk: local radio noise
+
+- Symptom: Public channel messages on the C++ Heltec, not on the M5 companion. Overnight the Heltec heard adverts from about 80 nodes (`mc heard`: its contacts' last-heard times per hour); the M5 beside it, on USB, delivered no packet to its node in 15.8 h. It still heard the Heltec 30 cm away.
+- Settings compared with the C++ (`CustomSX1262::std_init`, `RadioLibWrapper::begin`, the M5 variant): the same (DIO2 switch, TCXO 3.3 V, DC-DC, 140 mA, boosted gain, sync 0x1424, preamble 32 at SF8). Chip read back: receiving, no errors, gain 0x96.
+- Noise floor on the desk, M5 companion on USB: −94 to −99 dBm, whatever was switched off (Bluetooth, GPS, screen, buzzer, debug log); unplugged on the desk −100 to −106.
+- **By a window, on battery:** noise floor −113 to −115 dBm, and in 40 minutes the M5 received 32 flood packets with a good CRC (3 CRC errors, 1 header error), the last at −113 dBm and −10 dB SNR, the limit at SF8. None was refused by our decoder.
+- Meanwhile the Heltec on the desk received nothing (530 since 09:00 UTC, noise floor up from −78/−81 to −72 dBm).
+- So the receive path works at full sensitivity; the desk has a noise source that drowns the network's weak signals (here at about −113 dBm), the M5 first (no LNA, small antenna), then since about 09:00 UTC the Heltec too.
+- New diagnostics: the `debug-log` status line shows the receive funnel (radio OK / CRC / header errors, last RSSI and SNR, undecodable, refused, flood, direct) and the chip's state; the battery history records the noise floor every minute; `mc heard` (contacts' last-heard histogram, no names) and `mc tx-power`.
+
 ## 2026-11-14 — repeater light sleep on the M5 (P2)
 
 - Setup: `rpt-m5` over the companion store, `powersaving on` (answer `on - After 2 minutes`), the C++ Heltec as the other radio, `mc term` on the CH340 port (it does not reset the M5).

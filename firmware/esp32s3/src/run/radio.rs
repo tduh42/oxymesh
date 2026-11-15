@@ -132,8 +132,23 @@ fn channel_busy(
     false
 }
 
+/// What the radio received since boot, before the node sees it (diagnostics).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RxCounts {
+    /// RX_DONE with a good CRC.
+    pub done: u32,
+    /// RX_DONE or CRC_ERR with a bad CRC.
+    pub crc: u32,
+    /// HEADER_ERR, counted once per latch.
+    pub header: u32,
+    pub last_rssi: i16,
+    pub last_snr4: i8,
+}
+
 pub struct Radio<'d, F: FrontEnd> {
     pub sx: Sx126x<'d>,
+    pub rx_counts: RxCounts,
+    header_latched: bool,
     pub fe: F,
     chip: Chip,
     cfg: LoRaConfig,
@@ -155,6 +170,8 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
     pub fn new(sx: Sx126x<'d>, fe: F, chip: Chip, prefs: &Prefs, tx_dbm: i8) -> Self {
         let mut r = Self {
             sx,
+            rx_counts: RxCounts::default(),
+            header_latched: false,
             fe,
             chip,
             cfg: lora_of(prefs),
@@ -240,6 +257,11 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
     ) -> Option<Tx> {
         let mut event = None;
         let flags = self.sx.irq_status().unwrap_or(0);
+        let header = flags & irq::HEADER_ERR != 0;
+        if header && !self.header_latched {
+            self.rx_counts.header = self.rx_counts.header.wrapping_add(1);
+        }
+        self.header_latched = header;
         let mut cleared = true;
         if flags & irq::TX_DONE != 0 && self.transmitting {
             m.node().tx_done(now);
@@ -247,15 +269,23 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
             event = Some(Tx::Done);
         } else if flags & irq::RX_DONE != 0 {
             let crc = flags & irq::CRC_ERR != 0;
+            if crc {
+                self.rx_counts.crc = self.rx_counts.crc.wrapping_add(1);
+            } else {
+                self.rx_counts.done = self.rx_counts.done.wrapping_add(1);
+            }
             if let Ok(pk) = self.sx.read_packet(&mut self.buf, crc)
                 && !crc
             {
+                self.rx_counts.last_rssi = pk.rssi_dbm;
+                self.rx_counts.last_snr4 = i8::try_from(pk.snr_qdb).unwrap_or(0);
                 let snr4 = i8::try_from(pk.snr_qdb).unwrap_or(0);
                 let n = pk.len.min(self.buf.len());
                 m.rx(now, &self.buf[..n], snr4, pk.rssi_dbm, rng);
             }
             let _ = self.sx.clear_irq();
         } else if flags & irq::CRC_ERR != 0 {
+            self.rx_counts.crc = self.rx_counts.crc.wrapping_add(1);
             let _ = self
                 .sx
                 .clear_irq_mask(irq::CRC_ERR | rx_watch::HEADER_FLAGS);
@@ -346,6 +376,18 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
             t = t.min(Instant::now() + Duration::from_millis(5));
         }
         t
+    }
+
+    /// The chip's state, for diagnostics: (chip mode from GetStatus: 2 standby RC, 3 standby
+    /// XOSC, 4 FS, 5 RX, 6 TX; device errors; RX gain register 0x08AC; sync word 0x0740-41).
+    pub fn chip_state(&mut self) -> (u8, u16, u8, [u8; 2]) {
+        let mode = self.sx.status().map_or(0, |s| (s >> 4) & 7);
+        let errors = self.sx.device_errors().unwrap_or(0xFFFF);
+        let mut gain = [0u8];
+        let _ = self.sx.read_reg(0x08AC, &mut gain);
+        let mut sync = [0u8; 2];
+        let _ = self.sx.read_reg(0x0740, &mut sync);
+        (mode, errors, gain[0], sync)
     }
 
     /// DIO1, to wake the chip from light sleep.

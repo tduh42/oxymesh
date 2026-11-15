@@ -94,6 +94,8 @@ pub struct Stats {
     /// C++ `ERR_EVENT_*`: 1 pool full, 2 listen before talk too long.
     pub err_flags: u16,
     pub dropped_full: u32,
+    /// Decoded, but refused by `PacketBuf::from_packet` (diagnostics; not in `GET_STATS`).
+    pub recv_refused: u32,
 }
 
 pub const ERR_EVENT_FULL: u16 = 1 << 0;
@@ -115,6 +117,7 @@ impl Stats {
         rx_airtime_ms: 0,
         err_flags: 0,
         dropped_full: 0,
+        recv_refused: 0,
     };
 }
 

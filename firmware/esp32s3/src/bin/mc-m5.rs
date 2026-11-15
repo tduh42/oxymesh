@@ -199,8 +199,8 @@ mod diag {
         busy_us: u64,
         window: embassy_time::Instant,
         reads: u32,
-        /// (minutes since boot, battery mV, USB power).
-        history: heapless::Deque<(u32, u16, bool), 96>,
+        /// (minutes since boot, battery mV, USB power, noise floor dBm), every minute.
+        history: heapless::Deque<(u32, u16, bool, i16), 96>,
     }
 
     impl Power {
@@ -219,7 +219,7 @@ mod diag {
             self.busy_us += start.elapsed().as_micros();
         }
 
-        pub fn every_10_s(&mut self, battery_mv: u16, usb: bool) {
+        pub fn every_10_s(&mut self, battery_mv: u16, usb: bool, noise: i16) {
             let span = self.window.elapsed().as_micros().max(1);
             log::info!(
                 "power: {} passes in {} ms, busy {} us ({}.{:02} %)",
@@ -232,19 +232,19 @@ mod diag {
             self.passes = 0;
             self.busy_us = 0;
             self.window = embassy_time::Instant::now();
-            if self.reads % 30 == 0 {
+            if self.reads % 6 == 0 {
                 if self.history.is_full() {
                     self.history.pop_front();
                 }
                 let min = (embassy_time::Instant::now().as_secs() / 60) as u32;
-                let _ = self.history.push_back((min, battery_mv, usb));
+                let _ = self.history.push_back((min, battery_mv, usb, noise));
             }
             if self.reads % 6 == 0 {
-                let mut line: heapless::String<1200> = heapless::String::new();
-                for (m, mv, usb) in &self.history {
+                let mut line: heapless::String<1800> = heapless::String::new();
+                for (m, mv, usb, nf) in &self.history {
                     let _ = core::fmt::write(
                         &mut line,
-                        format_args!("{m}:{mv}{} ", if *usb { "u" } else { "" }),
+                        format_args!("{m}:{mv}{}:{nf} ", if *usb { "u" } else { "" }),
                     );
                 }
                 log::info!("battery: {line}");
@@ -685,12 +685,30 @@ async fn main(_spawner: Spawner) -> ! {
                         dev.node.disp.stats.recv_flood,
                         dev.node.disp.stats.recv_direct,
                     );
+                    // The receive funnel, radio to node (why a packet never shows).
+                    let (mode, errs, gain, sync) = radio.chip_state();
+                    let rc = radio.rx_counts;
+                    let st = &dev.node.disp.stats;
+                    info!(
+                        "radio: mode {mode} errors {errs:#06x} gain {gain:#04x} sync {:02x}{:02x}; rx ok {} crc {} header {}; last {} dBm {} dB/4; node undecodable {} refused {} flood {} direct {}",
+                        sync[0],
+                        sync[1],
+                        rc.done,
+                        rc.crc,
+                        rc.header,
+                        rc.last_rssi,
+                        rc.last_snr4,
+                        st.recv_errors,
+                        st.recv_refused,
+                        st.recv_flood,
+                        st.recv_direct
+                    );
                 }
                 let raw_mv = adc.read_blocking(&mut bat_pin);
                 dev.battery_mv =
                     bat.push((u32::from(raw_mv) * m5::BATTERY_DIVIDER_MILLI / 1000) as u16);
                 #[cfg(feature = "debug-log")]
-                power.every_10_s(dev.battery_mv, usb_in.is_high());
+                power.every_10_s(dev.battery_mv, usb_in.is_high(), dev.noise_floor);
             }
 
             // Interface: notifications, buttons, timers.

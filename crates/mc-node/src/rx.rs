@@ -35,6 +35,7 @@ impl Node {
             return;
         };
         let Ok(mut pkt) = PacketBuf::from_packet(&p) else {
+            self.disp.stats.recv_refused = self.disp.stats.recv_refused.wrapping_add(1);
             return;
         };
         if pkt.header.route.is_flood() {
