@@ -26,6 +26,8 @@ Log of tests on the real devices. Each entry: date, setup, command, result.
 - **By a window, on battery:** noise floor −113 to −115 dBm, and in 40 minutes the M5 received 32 flood packets with a good CRC (3 CRC errors, 1 header error), the last at −113 dBm and −10 dB SNR, the limit at SF8. None was refused by our decoder.
 - Meanwhile the Heltec on the desk received nothing (530 since 09:00 UTC, noise floor up from −78/−81 to −72 dBm).
 - So the receive path works at full sensitivity; the desk has a noise source that drowns the network's weak signals (here at about −113 dBm), the M5 first (no LNA, small antenna), then since about 09:00 UTC the Heltec too.
+- **Checked against the C++ firmware** (MeshCore companion v1.18.0 for the ThinkNode M5, flashed on the same M5 around NVS, then oxymesh put back with its data in `mcdata` intact): noise floor −97 dBm on the desk and −116 dBm by the window, the same as oxymesh (−94 to −100 and −113 to −115). Both received Public channel messages by the window, and neither on the desk. The Heltec's floor stayed at −67/−68 dBm whichever firmware the M5 ran, and a phone in airplane mode changed nothing.
+- Side effect of the switch: the C++ firmware wrote its own old time (2026-11-05 22:27 UTC) into the clock chip, without the lost-power flag, and oxymesh trusted it at boot; `mc time` set it right.
 - New diagnostics: the `debug-log` status line shows the receive funnel (radio OK / CRC / header errors, last RSSI and SNR, undecodable, refused, flood, direct) and the chip's state; the battery history records the noise floor every minute; `mc heard` (contacts' last-heard histogram, no names) and `mc tx-power`.
 
 ## 2026-11-14 — repeater light sleep on the M5 (P2)
