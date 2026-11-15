@@ -900,7 +900,21 @@ fn advert_heard(from: &mut Peer, to: &mut Peer) -> Result<(), String> {
 /// nothing that reads a message queue: zero-hop adverts both ways (heard), a DM from B to A
 /// (delivery acknowledged), a telemetry ping each way; A's uptime is checked every round, so a
 /// restart shows. B's DMs stay queued on A for its app.
-pub fn soak(a_path: &str, b_path: &str, runs: u32, verbose: bool) -> Result<(), String> {
+/// How often each check runs, in rounds, and the pause between rounds.
+#[derive(Debug, Clone, Copy)]
+pub struct Pace {
+    pub gap_s: u64,
+    pub advert_every: u32,
+    pub dm_every: u32,
+}
+
+pub fn soak(
+    a_path: &str,
+    b_path: &str,
+    runs: u32,
+    pace: Pace,
+    verbose: bool,
+) -> Result<(), String> {
     let mut a = open(a_path, "A", verbose)?;
     let mut b = open(b_path, "B", verbose)?;
     if a.key == b.key {
@@ -939,15 +953,31 @@ pub fn soak(a_path: &str, b_path: &str, runs: u32, verbose: bool) -> Result<(), 
     let t_start = Instant::now();
     for run in 1..=runs {
         let mut line = Vec::new();
+        let due = |every: u32| every > 0 && (run - 1) % every == 0;
+        let skip = || Err(String::from("skipped"));
+        let adverts = due(pace.advert_every);
         let results: [Result<Option<u128>, String>; 5] = [
-            advert_heard(&mut a, &mut b).map(|()| None),
-            advert_heard(&mut b, &mut a).map(|()| None),
-            dm_acked(&mut b, &a, &format!("oxymesh soak {run}/{runs}")).map(Some),
+            if adverts {
+                advert_heard(&mut a, &mut b).map(|()| None)
+            } else {
+                skip()
+            },
+            if adverts {
+                advert_heard(&mut b, &mut a).map(|()| None)
+            } else {
+                skip()
+            },
+            if due(pace.dm_every) {
+                dm_acked(&mut b, &a, &format!("oxymesh soak {run}/{runs}")).map(Some)
+            } else {
+                skip()
+            },
             ping(&mut a, &b).map(Some),
             ping(&mut b, &a).map(Some),
         ];
         for (i, r) in results.iter().enumerate() {
             match r {
+                Err(e) if e == "skipped" => {}
                 Ok(t) => {
                     tally[i].0 += 1;
                     if let (Some(t), Some(v)) = (t, times.get_mut(i.saturating_sub(2))) {
@@ -980,6 +1010,9 @@ pub fn soak(a_path: &str, b_path: &str, runs: u32, verbose: bool) -> Result<(), 
                 line.join("; ")
             }
         );
+        if pace.gap_s > 0 && run < runs {
+            std::thread::sleep(Duration::from_secs(pace.gap_s));
+        }
     }
     let (ta, tb) = (a.other.1, b.other.1);
     let _ = open_telemetry(&mut a, Some(ta));

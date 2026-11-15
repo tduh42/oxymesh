@@ -179,6 +179,15 @@ enum Cmd {
         b: String,
         #[arg(long, default_value_t = 100)]
         runs: u32,
+        /// Seconds between rounds.
+        #[arg(long, default_value_t = 0)]
+        gap: u64,
+        /// Adverts every this many rounds (0: never).
+        #[arg(long, default_value_t = 1)]
+        advert_every: u32,
+        /// A DM B → A every this many rounds (0: never).
+        #[arg(long, default_value_t = 1)]
+        dm_every: u32,
         #[arg(short, long)]
         verbose: bool,
     },
@@ -261,8 +270,21 @@ fn main() {
             a,
             b,
             runs,
+            gap,
+            advert_every,
+            dm_every,
             verbose,
-        } => duo::soak(&a, &b, runs, verbose),
+        } => duo::soak(
+            &a,
+            &b,
+            runs,
+            duo::Pace {
+                gap_s: gap,
+                advert_every,
+                dm_every,
+            },
+            verbose,
+        ),
         Cmd::Duo {
             a,
             b,
