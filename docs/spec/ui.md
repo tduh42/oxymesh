@@ -104,6 +104,7 @@ Home (always-on face)
 - **Hibernate**: leaves a badge on the panel (name, my-card QR, "off — press B") and wakes on B.
 - **Timestamps are fixed** ("14:02", "yesterday") or whole minutes and more on the panel's lists and cards ("now", "5 min", "3 h", "2 d"), never seconds, so the clock alone never forces a redraw beyond its minute tick.
 - **First boot**: a setup flow (region, name, time from GPS or the app). It can be skipped, and it comes back from Settings → System.
+- **About** (Settings → System): name, key, firmware, radio settings, contacts and channels used, battery, uptime, messages waiting for the app. After the firmware line, the device's health (ADR-0013): `Started` with the reason of the last start (`power on`, `restart`, `woke up`, `after an error`, `watchdog`, `low voltage`, `USB reset`), always; then only when there is something to say, `Errors` (panics since the power came on, and the last one's file and line), `Radio` (`2 resets`, or `not answering`) and `Storage` (`3 write errors`).
 
 ## 7. Two-button text entry
 

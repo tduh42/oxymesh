@@ -38,13 +38,13 @@ use mc_node::Prefs;
 use mc_node::device::{Action, FrontEnd, Info};
 use mc_ui::input::{Button, Gestures};
 use mc_ui::status::{Oled, Status};
-use mc_ui::{Ble, Ctx, Intent, Outcome, perform};
+use mc_ui::{Ble, Ctx, Health, Intent, Outcome, perform};
 use oxymesh_esp32s3::battery::{Smoother, percent};
 use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::heltec_v4::{self as board, Fem, UsbWire};
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, Radio, Tx};
-use oxymesh_esp32s3::run::{self, Deadline, boot, mc_now};
+use oxymesh_esp32s3::run::{self, Deadline, boot, crash, mc_now};
 use oxymesh_esp32s3::ssd1306::Ssd1306;
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -100,6 +100,10 @@ fn ctx(dev: &Device, ble: Ble, charging: bool) -> Ctx<'_> {
         light: true,
         gps: None,
         ble,
+        health: Health {
+            restart: crash::restart(),
+            ..Default::default()
+        },
     }
 }
 
@@ -110,7 +114,10 @@ async fn main(_spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: HEAP_RECLAIMED);
     #[cfg(feature = "debug-log")]
     esp_println::logger::init_logger_from_env();
+    crash::note();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    // From here on a loop that stops turning restarts the chip (ADR-0013).
+    let mut watchdog = crash::Watchdog::start(p.RTC_TIMER);
     let lpwr = p.LPWR;
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
@@ -237,6 +244,7 @@ async fn main(_spawner: Spawner) -> ! {
         // Until then, the button is sampled every 10 ms after an edge (debounce).
         let mut button_settle = 0u64;
         loop {
+            watchdog.feed();
             let now = mc_now();
             link.poll(dev, ble_sh, now, &mut rng, &mut store);
             match radio.poll(
@@ -262,6 +270,7 @@ async fn main(_spawner: Spawner) -> ! {
                         esp_hal::system::software_reset();
                     }
                     Action::FactoryReset => {
+                        watchdog.stop();
                         store.erase_all();
                         Timer::after(Duration::from_millis(1000)).await;
                         esp_hal::system::software_reset();
@@ -326,6 +335,7 @@ async fn main(_spawner: Spawner) -> ! {
             for i in intents {
                 let o = perform(&i, dev, mc_now(), &mut rng, &mut store);
                 if o == Outcome::Hibernate {
+                    watchdog.stop();
                     dev.flush_contacts(&mut store);
                     if let Some(o) = oled.as_mut() {
                         let _ = o.power(false);

@@ -50,7 +50,7 @@ use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::radio::{Chip, NoFrontEnd, Radio, Tx, lora_of};
 use oxymesh_esp32s3::run::server::Console;
 use oxymesh_esp32s3::run::sleep::{self, Saver};
-use oxymesh_esp32s3::run::{Deadline, boot, mc_now, server};
+use oxymesh_esp32s3::run::{Deadline, boot, crash, mc_now, server};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -103,7 +103,10 @@ pub async fn run(role: Role) -> ! {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: HEAP_RECLAIMED);
     #[cfg(feature = "debug-log")]
     esp_println::logger::init_logger_from_env();
+    crash::note();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    // From here on a loop that stops turning restarts the chip (ADR-0013).
+    let mut watchdog = crash::Watchdog::start(p.RTC_TIMER);
     let lpwr = p.LPWR;
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
@@ -199,7 +202,7 @@ pub async fn run(role: Role) -> ! {
     }
     rpt.board.manufacturer = MANUFACTURER;
     rpt.board.build_date = BUILD_DATE;
-    rpt.board.reset_reason = "Not available";
+    rpt.board.reset_reason = crash::restart();
     // Light sleep (`powersaving on`, P2).
     rpt.board.powersaving = true;
     rpt.board.shutdown_reason = "Not available";
@@ -293,6 +296,7 @@ pub async fn run(role: Role) -> ! {
     // Until then, the buttons are sampled every 10 ms after an edge (debounce).
     let mut buttons_settle = 0u64;
     loop {
+        watchdog.feed();
         let now = mc_now();
         console.poll(&mut wire, &mut rpt, node, now, &mut rng);
         if let Some(t) = radio.poll(node, now, &mut rng)
@@ -350,11 +354,19 @@ pub async fn run(role: Role) -> ! {
             }
             match a {
                 Action::Reboot => {
+                    // The access list's lazy save would be lost.
+                    if rpt.take_pending_acl_save() {
+                        rpt.save(node, Action::SaveAcl, &mut store);
+                    }
                     Timer::after(Duration::from_millis(200)).await;
                     esp_hal::system::software_reset();
                 }
                 Action::PowerOff => power_off = true,
-                Action::Erase => store.erase_all(),
+                Action::Erase => {
+                    watchdog.stop();
+                    store.erase_all();
+                    watchdog.resume();
+                }
                 Action::RadioChanged | Action::RestoreRadio => {
                     let tx = node.apply_regulatory(|t| t);
                     radio.reconfigure(&node.prefs, tx);
@@ -408,6 +420,11 @@ pub async fn run(role: Role) -> ! {
         }
 
         if power_off {
+            watchdog.stop();
+            // The access list's lazy save would be lost.
+            if rpt.take_pending_acl_save() {
+                rpt.save(node, Action::SaveAcl, &mut store);
+            }
             let [cur, _, draw] = &mut *frames;
             draw.clear();
             let big = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);

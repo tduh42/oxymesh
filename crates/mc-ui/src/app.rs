@@ -44,6 +44,24 @@ pub struct Ctx<'a> {
     /// The GPS, when it has a fix.
     pub gps: Option<GpsFix>,
     pub ble: Ble,
+    pub health: Health<'a>,
+}
+
+/// What the runner knows about the device's own health, shown in About (ADR-0013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Health<'a> {
+    /// Why the device last started, in words ("power on", "watchdog"); empty when unknown.
+    pub restart: &'a str,
+    /// Panics since the power came on.
+    pub panics: u32,
+    /// The last one's source file and line.
+    pub panic_at: Option<(&'a str, u32)>,
+    /// Times the radio chip was reset and set up again.
+    pub radio_recoveries: u32,
+    /// The radio chip does not answer.
+    pub radio_down: bool,
+    /// Storage writes that failed.
+    pub store_errors: u32,
 }
 
 /// Bluetooth, as the runner reports it.

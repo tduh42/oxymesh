@@ -298,6 +298,13 @@ fn access_list_by_hand() {
     assert!(r.node.contacts.find(&[0xAB; 32]).is_none());
     r.wait(5000);
     assert!(r.actions().contains(&Action::SaveAcl));
+    // A restart before the lazy save is due: the runner is told the save still waits, once.
+    assert!(!r.r.take_pending_acl_save());
+    assert_eq!(r.cli(&format!("setperm {key} 3")), "OK");
+    assert!(r.r.take_pending_acl_save());
+    assert!(!r.r.take_pending_acl_save());
+    r.wait(5000);
+    assert!(!r.actions().contains(&Action::SaveAcl));
 }
 
 #[test]

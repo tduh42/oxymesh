@@ -94,6 +94,10 @@ fn ctx(w: &World, light: bool, ble: Ble) -> Ctx<'_> {
         charging: false,
         light,
         ble,
+        health: mc_ui::Health {
+            restart: "power on",
+            ..Default::default()
+        },
         // A fixed fix near Chamonix, for the GPS and Map tools.
         gps: Some(GpsFix {
             lat: 45_923_700,

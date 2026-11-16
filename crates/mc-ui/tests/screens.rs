@@ -67,6 +67,7 @@ fn ctx(w: &mc_sim::World) -> Ctx<'_> {
         charging: false,
         light: false,
         ble: mc_ui::Ble::default(),
+        health: mc_ui::Health::default(),
         gps: None,
     }
 }
@@ -110,6 +111,61 @@ fn back_pops_and_double_back_goes_home() {
     press(&mut app, &c, &[Click(B)]);
     assert_eq!(app.depth(), 1, "B on Home does nothing");
     assert_eq!(press(&mut app, &c, &[Long(B)]), vec![Intent::ToggleLight]);
+}
+
+/// About says why the device last started, and what went wrong since the power came on
+/// (ADR-0013): nothing more than the start when all is well.
+#[test]
+fn about_shows_the_devices_health() {
+    let w = world();
+    let to_about = [Double(A), Long(A), Double(A), Long(A), Long(A)];
+    let well = Ctx {
+        health: mc_ui::Health {
+            restart: "power on",
+            ..Default::default()
+        },
+        ..ctx(&w)
+    };
+    let mut app = App::new(COMPACT, false);
+    press(&mut app, &well, &to_about);
+    let screen = text(&mut app, COMPACT, &well);
+    assert!(
+        screen.contains("Started") && screen.contains("power on"),
+        "{screen}"
+    );
+    for absent in ["Errors", "Radio", "Storage"] {
+        assert!(!screen.contains(absent), "{absent} in {screen}");
+    }
+
+    let unwell = Ctx {
+        health: mc_ui::Health {
+            restart: "after an error",
+            panics: 2,
+            panic_at: Some(("firmware/esp32s3/src/run/radio.rs", 259)),
+            radio_recoveries: 1,
+            radio_down: false,
+            store_errors: 3,
+        },
+        ..ctx(&w)
+    };
+    let screen = text(&mut app, COMPACT, &unwell);
+    for line in [
+        "after an error",
+        "2 radio.rs:259",
+        "1 reset|",
+        "3 write errors",
+    ] {
+        assert!(screen.contains(line), "{line} not in {screen}");
+    }
+    let down = Ctx {
+        health: mc_ui::Health {
+            radio_down: true,
+            radio_recoveries: 4,
+            ..unwell.health
+        },
+        ..ctx(&w)
+    };
+    assert!(text(&mut app, COMPACT, &down).contains("not answering"));
 }
 
 #[test]

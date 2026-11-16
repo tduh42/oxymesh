@@ -5,6 +5,7 @@
 
 pub mod boot;
 pub mod bt;
+pub mod crash;
 pub mod link;
 pub mod radio;
 pub mod server;

@@ -296,6 +296,9 @@ Hex output is uppercase, as `Utils::toHex` writes it.
 - There are no bridges and no ADC multiplier.
 - After `region load`, the default scope used for adverts follows the new table at once. The C++ keeps the key it had computed until `region default` or a restart.
 - `stats-packets` "recv" and "sent" are the node's counters (§2.11).
+- `get pwrmgt.bootreason` gives the real reason of the last start as `Reset:` (power on, restart, woke up, after an error, watchdog, low voltage, USB reset; ADR-0013). The C++ answers "Not available" on ESP32.
+- `reboot` and `poweroff` first write an access-list change still waiting for its lazy save (5 s). The C++ restarts at once and loses it.
+- The server restarts by itself after a panic or a main loop stuck for 30 s (ADR-0013).
 
 ### 4.7 Power saving (`powersaving on`)
 

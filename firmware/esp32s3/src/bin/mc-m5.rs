@@ -48,7 +48,7 @@ use mc_ui::input::{Button, Gestures};
 use mc_ui::overlay::{self, Overlay, PixelRect};
 use mc_ui::panel::{self, COMPACT, Grid, LARGE};
 use mc_ui::refresh::{self, Kind, Policy};
-use mc_ui::{App, Ble, Ctx, Intent, Outcome, perform};
+use mc_ui::{App, Ble, Ctx, Health, Intent, Outcome, perform};
 use oxymesh_esp32s3::battery::{Smoother, percent};
 use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::buzzer;
@@ -58,7 +58,7 @@ use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, NoFrontEnd, Radio, Tx};
-use oxymesh_esp32s3::run::{self, Deadline, boot, mc_now};
+use oxymesh_esp32s3::run::{self, Deadline, boot, crash, mc_now};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -117,37 +117,6 @@ fn to_panel(src: &Frame, dst: &mut Frame, invert: bool, rotate: bool) {
             src.bits.get(i).copied().unwrap_or(0xFF)
         };
         *d = if invert { !b } else { b };
-    }
-}
-
-/// Reset reasons of the last four boots, oldest first (`esp_hal::system::reset_reason`), kept
-/// in RTC memory across resets that leave the power on: what ended a run no log could see.
-/// The `debug-log` build prints them on its status line.
-mod boots {
-    #[esp_hal::ram(unstable(rtc_fast, persistent))]
-    static mut BOOTS: [u32; 5] = [0; 5];
-    const MAGIC: u32 = 0x0B00_75ED;
-
-    pub fn note() {
-        let r = esp_hal::system::reset_reason().map_or(0, |r| r as u32);
-        // SAFETY: written once at boot, before anything else runs; read only afterwards.
-        unsafe {
-            let p = &raw mut BOOTS;
-            let mut b = p.read();
-            if b[0] != MAGIC {
-                b = [MAGIC, 0, 0, 0, 0];
-            }
-            b.copy_within(2..5, 1);
-            b[4] = r;
-            p.write(b);
-        }
-    }
-
-    #[cfg_attr(not(feature = "debug-log"), allow(dead_code))]
-    pub fn last() -> [u32; 4] {
-        // SAFETY: see `note`.
-        let b = unsafe { (&raw const BOOTS).read() };
-        [b[1], b[2], b[3], b[4]]
     }
 }
 
@@ -283,8 +252,30 @@ fn ble_of(sh: &Shared) -> Ble {
     }
 }
 
+/// The device's health as About shows it (ADR-0013).
+fn health_of(
+    panic: &Option<crash::Panic>,
+    radio: mc_core::radio_health::Report,
+    store_errors: u32,
+) -> Health<'_> {
+    Health {
+        restart: crash::restart(),
+        panics: panic.as_ref().map_or(0, |p| p.count),
+        panic_at: panic.as_ref().map(|p| (p.file(), p.line)),
+        radio_recoveries: radio.recoveries,
+        radio_down: radio.down,
+        store_errors,
+    }
+}
+
 /// What the screen sees for one draw or one input.
-fn ui_ctx(dev: &Device, ble: Ble, charging: bool, light: bool) -> Ctx<'_> {
+fn ui_ctx<'a>(
+    dev: &'a Device,
+    ble: Ble,
+    charging: bool,
+    light: bool,
+    health: Health<'a>,
+) -> Ctx<'a> {
     Ctx {
         dev,
         now_ms: Instant::now().as_millis(),
@@ -299,6 +290,7 @@ fn ui_ctx(dev: &Device, ble: Ble, charging: bool, light: bool) -> Ctx<'_> {
             satellites: f.satellites,
         }),
         ble,
+        health,
     }
 }
 
@@ -335,8 +327,11 @@ async fn main(_spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     #[cfg(feature = "debug-log")]
     diag::paint();
-    boots::note();
+    crash::note();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    // From here on a loop that stops turning restarts the chip (ADR-0013).
+    let mut watchdog = crash::Watchdog::start(p.RTC_TIMER);
+    let last_panic = crash::last_panic();
     let lpwr = p.LPWR;
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
@@ -541,7 +536,8 @@ async fn main(_spawner: Spawner) -> ! {
     let panel_frame = PANEL.init(Frame::new());
     let mut app = App::new(grid_of(&dev.node.prefs), true);
     {
-        let c = ui_ctx(dev, ble_of(&ble_sh), usb_in.is_high(), light);
+        let health = health_of(&last_panic, radio.health(), store.errors);
+        let c = ui_ctx(dev, ble_of(&ble_sh), usb_in.is_high(), light, health);
         app.start(&c);
     }
     let mut gestures = Gestures::new();
@@ -565,7 +561,10 @@ async fn main(_spawner: Spawner) -> ! {
         let mut term = Terminal::new(panel::backend(panel_frame, app.grid())).expect("terminal");
         #[cfg(feature = "debug-log")]
         let mut power = diag::Power::new();
+        #[cfg(feature = "debug-log")]
+        let mut crash_test: Option<u64> = None;
         loop {
+            watchdog.feed();
             #[cfg(feature = "debug-log")]
             let pass_start = Instant::now();
             let now = mc_now();
@@ -616,6 +615,7 @@ async fn main(_spawner: Spawner) -> ! {
                         esp_hal::system::software_reset();
                     }
                     Action::FactoryReset => {
+                        watchdog.stop();
                         store.erase_all();
                         Timer::after(Duration::from_millis(1000)).await;
                         esp_hal::system::software_reset();
@@ -668,7 +668,7 @@ async fn main(_spawner: Spawner) -> ! {
                     info!(
                         "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {}; clock chip {:?} (lost power, time); rx {} flood {} direct",
                         Instant::now().as_secs(),
-                        boots::last(),
+                        crash::boots(),
                         if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
                             "on"
                         } else {
@@ -705,6 +705,16 @@ async fn main(_spawner: Spawner) -> ! {
                         st.recv_flood,
                         st.recv_direct
                     );
+                    let h = radio.health();
+                    info!(
+                        "health: started {}; panics {:?}; radio recoveries {} failures {} down {}; store errors {}",
+                        crash::restart(),
+                        last_panic.as_ref().map(|p| (p.count, p.file(), p.line)),
+                        h.recoveries,
+                        h.failures,
+                        h.down,
+                        store.errors
+                    );
                 }
                 let raw_mv = adc.read_blocking(&mut bat_pin);
                 dev.battery_mv =
@@ -718,12 +728,50 @@ async fn main(_spawner: Spawner) -> ! {
             let charging = usb_in.is_high();
             gestures.edge(Button::A, btn_a.is_low(), now_ms);
             gestures.edge(Button::B, btn_b.is_low(), now_ms);
+            // `debug-log` only, to prove the restarts on the device (ADR-0013): B held 15 s
+            // panics; A and B held 15 s stop the loop, for the watchdog to find.
+            #[cfg(feature = "debug-log")]
+            if btn_b.is_low() {
+                let since = *crash_test.get_or_insert(now_ms);
+                if now_ms.saturating_sub(since) >= 15_000 {
+                    if btn_a.is_low() {
+                        info!("test: the loop stops here, the watchdog restarts the chip");
+                        loop {
+                            core::hint::spin_loop();
+                        }
+                    }
+                    panic!("test: B held 15 s");
+                }
+            } else {
+                crash_test = None;
+            }
+            // The same with no hand on the buttons: built with OXYMESH_CRASH_TEST=panic (or
+            // =hang), a boot after power-on does it once, 20 s in.
+            #[cfg(feature = "debug-log")]
+            if let Some(kind) = option_env!("OXYMESH_CRASH_TEST")
+                && crash::restart() == "power on"
+                && now_ms >= 20_000
+            {
+                if kind == "hang" {
+                    info!("test: the loop stops here, the watchdog restarts the chip");
+                    loop {
+                        core::hint::spin_loop();
+                    }
+                }
+                panic!("test: OXYMESH_CRASH_TEST");
+            }
             let mut events: heapless::Vec<UiEvent, 32> = heapless::Vec::new();
             while let Some(e) = dev.poll_ui() {
                 let _ = events.push(e);
             }
             {
-                let c = ui_ctx(dev, ble_of(ble_sh), charging, light);
+                let c = ui_ctx(
+                    dev,
+                    ble_of(ble_sh),
+                    charging,
+                    light,
+                    health_of(&last_panic, radio.health(), store.errors),
+                );
                 let phone = ble_sh.state.get() == mc_ui::BleState::Connected;
                 for e in &events {
                     app.event(e, &c);
@@ -781,6 +829,7 @@ async fn main(_spawner: Spawner) -> ! {
                 match o {
                     Outcome::CppImport => {
                         if let Some(mut fs) = cpp_fs() {
+                            watchdog.feed();
                             let r = cpp::import(&mut fs, dev.node.prefs.ui, &mut store);
                             info!("import: {r:?}");
                             if r.is_ok() {
@@ -807,11 +856,13 @@ async fn main(_spawner: Spawner) -> ! {
                         let _ = ble_sh.control.try_send(Control::ForgetAll);
                     }
                     Outcome::FactoryReset => {
+                        watchdog.stop();
                         store.erase_all();
                         Timer::after(Duration::from_millis(1000)).await;
                         esp_hal::system::software_reset();
                     }
                     Outcome::Hibernate => {
+                        watchdog.stop();
                         dev.flush_contacts(&mut store);
                         let [cur, _] = &mut *frames;
                         let badge = term.backend_mut().display_mut();
@@ -844,7 +895,13 @@ async fn main(_spawner: Spawner) -> ! {
                     }
                     _ => {}
                 }
-                let c = ui_ctx(dev, ble_of(ble_sh), charging, light);
+                let c = ui_ctx(
+                    dev,
+                    ble_of(ble_sh),
+                    charging,
+                    light,
+                    health_of(&last_panic, radio.health(), store.errors),
+                );
                 app.done(&i, &o, &c);
                 if app.sync(&c) {
                     drop(term);
@@ -900,7 +957,13 @@ async fn main(_spawner: Spawner) -> ! {
                 let [cur, prev] = &mut *frames;
                 if want_draw {
                     want_draw = false;
-                    let c = ui_ctx(dev, ble_of(ble_sh), charging, light);
+                    let c = ui_ctx(
+                        dev,
+                        ble_of(ble_sh),
+                        charging,
+                        light,
+                        health_of(&last_panic, radio.health(), store.errors),
+                    );
                     #[cfg(feature = "debug-log")]
                     let t0 = Instant::now();
                     let _ = term.draw(|f| app.draw(f, &c));
