@@ -121,6 +121,49 @@ pub struct UiPrefs {
     /// blink the LED, count in the header or play a tune. Cleared when a slot gets another
     /// channel (`Device::set_channel`).
     pub muted: u64,
+    /// What notifications and previews show of a message (`docs/spec/ui.md` §8).
+    pub previews: Previews,
+}
+
+/// What the screen shows of a message outside its open conversation: in the new-message
+/// banner, on Home and in list previews.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Previews {
+    /// Sender and text.
+    #[default]
+    Shown,
+    /// The sender, not the text.
+    Sender,
+    /// Neither: "New message".
+    Hidden,
+}
+
+impl Previews {
+    pub const fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Sender,
+            2 => Self::Hidden,
+            _ => Self::Shown,
+        }
+    }
+
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Self::Shown => 0,
+            Self::Sender => 1,
+            Self::Hidden => 2,
+        }
+    }
+
+    /// The text of a message may be shown.
+    pub const fn text(self) -> bool {
+        matches!(self, Self::Shown)
+    }
+
+    /// The sender of a new message may be shown.
+    pub const fn sender(self) -> bool {
+        !matches!(self, Self::Hidden)
+    }
 }
 
 impl UiPrefs {
@@ -134,6 +177,7 @@ impl UiPrefs {
         invert: false,
         rotate: false,
         muted: 0,
+        previews: Previews::Shown,
     };
 
     pub fn is_muted(&self, channel: u8) -> bool {

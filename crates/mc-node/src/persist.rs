@@ -148,7 +148,9 @@ pub fn encode_prefs(p: &Prefs) -> [u8; PREFS_RECORD] {
         w.put_u32_le(p.gps_interval)?;
         w.put_u8(p.agc_reset_interval)?;
         // Inverted, so that the zero bytes of older records read as the defaults (both on).
-        w.put_u8(u8::from(!p.rx_boosted_gain) | (u8::from(!p.fem_rxgain) << 1))
+        w.put_u8(u8::from(!p.rx_boosted_gain) | (u8::from(!p.fem_rxgain) << 1))?;
+        // Message previews; 0 (older records) is "shown".
+        w.put_u8(u.previews.to_u8())
     })();
     out
 }
@@ -227,6 +229,9 @@ pub fn decode_prefs(b: &[u8], defaults: &Prefs) -> Option<Prefs> {
             p.rx_boosted_gain = f & 1 == 0;
             p.fem_rxgain = f & 2 == 0;
         }
+        if let Ok(v) = r.u8() {
+            p.ui.previews = crate::node::Previews::from_u8(v);
+        }
     }
     Some(p)
 }
@@ -268,6 +273,7 @@ mod tests {
         q.gps_interval = 600;
         q.agc_reset_interval = 15;
         q.fem_rxgain = false;
+        q.ui.previews = crate::node::Previews::Sender;
         let back = decode_prefs(&encode_prefs(&q), &p).unwrap();
         assert_eq!(encode_prefs(&back), encode_prefs(&q));
         assert_eq!(back.ui, q.ui);
@@ -288,6 +294,13 @@ mod tests {
             (0, 0, 0)
         );
         assert!(early.rx_boosted_gain && early.fem_rxgain);
+        // A record from before message previews: shown.
+        let mut before = encode_prefs(&q);
+        before[145] = 0;
+        assert_eq!(
+            decode_prefs(&before, &p).unwrap().ui.previews,
+            crate::node::Previews::Shown
+        );
         assert!(back.rx_boosted_gain && !back.fem_rxgain);
         assert_eq!((back.gps_interval, back.agc_reset_interval), (600, 15));
     }

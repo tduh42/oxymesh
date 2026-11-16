@@ -780,7 +780,7 @@ fn banner_scene(w: u16, h: u16, blank: i16, seq: u32, ui: &Ui<'_>) -> Option<Sce
     }
     sc.dither(0, 0, w, h);
     let (x, y, cw) = (6i16, 8i16, w.saturating_sub(15));
-    let text = String::from_utf8_lossy(&m.text);
+    let text = screens::preview_text(ui, m);
     let lines = scene::wrap(Font::R10, &text, cw as i16 - 16);
     let n = lines.len().clamp(1, 3) as i16;
     let chh = (34 + 13 * n) as u16;
@@ -792,7 +792,7 @@ fn banner_scene(w: u16, h: u16, blank: i16, seq: u32, ui: &Ui<'_>) -> Option<Sce
     let when = crate::clock::ago(m.at, ui.ctx.unix);
     let right = x + cw as i16 - 8;
     sc.text(right, y + 19, Font::R8, Align::Right, true, &when);
-    let who = screens::peer_name(ui, m.peer);
+    let who = screens::notice_sender(ui, m.peer);
     let room = right - (x + 30) - scene::width(Font::R8, &when) - 6;
     sc.text(
         x + 30,
@@ -832,9 +832,13 @@ fn draw_banner(f: &mut Frame<'_>, body: Rect, seq: u32, ui: &Ui<'_>) -> Rect {
         ..body
     };
     f.render_widget(Clear, area);
-    let who = screens::peer_name(ui, m.peer);
-    let text = String::from_utf8_lossy(&m.text);
-    let mut lines = alloc::vec![Line::from(chrome::fit(&format!("New message: {who}"), w))];
+    let text = screens::preview_text(ui, m);
+    let title = if screens::previews(ui).sender() {
+        format!("New message: {}", screens::peer_name(ui, m.peer))
+    } else {
+        String::from("New message")
+    };
+    let mut lines = alloc::vec![Line::from(chrome::fit(&title, w))];
     for l in chrome::wrap(&text, w)
         .into_iter()
         .take(usize::from(area.height) - 1)

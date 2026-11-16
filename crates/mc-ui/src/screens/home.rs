@@ -72,6 +72,10 @@ impl Home {
         };
         let r = &dev.node.prefs.radio;
         let last = match dev.history().iter().filter(|m| !m.outgoing).last() {
+            Some(_) if !super::previews(ui).sender() => String::from(super::HIDDEN_TEXT),
+            Some(m) if !super::previews(ui).text() => {
+                format!("{}: {}", super::peer_name(ui, m.peer), super::HIDDEN_TEXT)
+            }
             Some(m) => {
                 let text = String::from_utf8_lossy(&m.text);
                 match m.peer {
@@ -226,11 +230,15 @@ impl Screen for Home {
                 sc.icon(8, cy + 5, icon, IconSize::S8, true);
                 let when = clock::ago(m.at, c.unix);
                 sc.text(wi - 8, cy + 12, Font::R8, Align::Right, true, &when);
-                let who = super::peer_name(ui, m.peer);
+                let who = if super::previews(ui).sender() {
+                    super::peer_name(ui, m.peer)
+                } else {
+                    String::from("Message")
+                };
                 let room = wi - 20 - scene::width(Font::R8, &when) - 14;
                 let who = scene::ellipsize(Font::B10, &who, room);
                 sc.text(20, cy + 12, Font::B10, Align::Left, true, &who);
-                let text = String::from_utf8_lossy(&m.text);
+                let text = super::preview_text(ui, m);
                 let lines = scene::wrap(Font::R10, &text, wi - 16);
                 for (i, l) in lines.iter().take(2).enumerate() {
                     let l = if i == 1 && lines.len() > 2 {

@@ -108,6 +108,32 @@ pub fn setup_start() -> setup::SetupRegion {
     setup::SetupRegion::default()
 }
 
+/// Shown in place of a message's text when previews are off (`docs/spec/ui.md` §8).
+pub const HIDDEN_TEXT: &str = "Message hidden";
+
+/// What notifications and previews show (Settings → Notifications → Message previews).
+pub fn previews(ui: &Ui<'_>) -> mc_node::Previews {
+    ui.ctx.dev.node.prefs.ui.previews
+}
+
+/// Who a new message is from, as a notification says it: the name, or "New message".
+pub fn notice_sender(ui: &Ui<'_>, peer: mc_node::history::Peer) -> String {
+    if previews(ui).sender() {
+        peer_name(ui, peer)
+    } else {
+        String::from("New message")
+    }
+}
+
+/// A message's text outside its conversation: the text, or [`HIDDEN_TEXT`].
+pub fn preview_text(ui: &Ui<'_>, m: &mc_node::history::Msg) -> String {
+    if previews(ui).text() {
+        String::from(String::from_utf8_lossy(&m.text))
+    } else {
+        String::from(HIDDEN_TEXT)
+    }
+}
+
 /// Who a conversation is with: contact name, channel name, or the key prefix.
 pub fn peer_name(ui: &Ui<'_>, peer: mc_node::history::Peer) -> String {
     let node = &ui.ctx.dev.node;

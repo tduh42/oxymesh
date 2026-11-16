@@ -636,6 +636,22 @@ fn buzzer_choice(ui: &Ui<'_>) -> Box<dyn Screen> {
     Box::new(Choice::new("Buzzer", options, Some(cur)))
 }
 
+const PREVIEWS: [(&str, &str, mc_node::Previews); 3] = [
+    ("Shown", "shown", mc_node::Previews::Shown),
+    ("Sender only", "sender only", mc_node::Previews::Sender),
+    ("Hidden", "hidden", mc_node::Previews::Hidden),
+];
+
+fn previews_choice(ui: &Ui<'_>) -> Box<dyn Screen> {
+    let cur = prefs(ui).ui.previews;
+    let options = PREVIEWS
+        .iter()
+        .map(|(l, _, v)| (String::from(*l), ui_with(ui, |u| u.previews = *v)))
+        .collect();
+    let at = PREVIEWS.iter().position(|(_, _, v)| *v == cur);
+    Box::new(Choice::new("Message previews", options, at))
+}
+
 pub fn notifications() -> Menu {
     Menu::new(
         "Notifications",
@@ -651,6 +667,19 @@ pub fn notifications() -> Menu {
                 Action::Run(|ui| {
                     Nav::IntentToast(ui_with(ui, |u| u.led_unread = !u.led_unread), "Saved")
                 }),
+            ),
+            Item::with(
+                "Previews",
+                |ui| {
+                    let cur = prefs(ui).ui.previews;
+                    String::from(
+                        PREVIEWS
+                            .iter()
+                            .find(|(_, _, v)| *v == cur)
+                            .map_or("shown", |(_, s, _)| *s),
+                    )
+                },
+                Action::Build(previews_choice),
             ),
         ],
     )

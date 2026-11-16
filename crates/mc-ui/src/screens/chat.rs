@@ -78,11 +78,11 @@ fn conversation_rows(ui: &Ui<'_>) -> Vec<Row> {
     v.into_iter()
         .map(|(p, m, unread)| {
             let name = peer_name(ui, p);
-            let text = String::from_utf8_lossy(&m.text);
+            let text = super::preview_text(ui, m);
             let preview = if m.outgoing {
                 format!("You: {text}")
             } else {
-                String::from(text)
+                text
             };
             Row {
                 badge: Some(match p {

@@ -681,3 +681,62 @@ fn holding_a_in_the_keyboard_inserts_once() {
         "{intents:?}"
     );
 }
+
+/// Message previews off: the banner, Home and the lists show no text ("Sender only"), and
+/// with "Hidden" the banner and Home's card name nobody; an opened conversation shows all.
+#[test]
+fn message_previews_hide_the_text_and_the_sender() {
+    use mc_node::Previews;
+    use mc_node::device::UiEvent;
+    use mc_node::history::Peer;
+    for mode in [Previews::Sender, Previews::Hidden] {
+        let mut w = world();
+        w.nodes[0].dev.node.prefs.ui.previews = mode;
+        let bob = w.nodes[0]
+            .dev
+            .history()
+            .iter()
+            .filter(|m| matches!(m.peer, Peer::Contact(_)))
+            .last()
+            .unwrap();
+        let e = UiEvent::Message {
+            seq: bob.seq,
+            peer: bob.peer,
+            outgoing: false,
+        };
+        let c = ctx(&w);
+        for grid in [LARGE, COMPACT] {
+            // On the panel: the banner over Home, then the Messages list.
+            let mut app = App::new(grid, true);
+            app.event(&e, &c);
+            draw_panel(&mut app, grid, &c);
+            let shown = body_texts(&app).join(" | ");
+            assert!(!shown.contains("Coffee"), "{mode:?}: {shown}");
+            assert!(shown.contains("Message hidden"), "{mode:?}: {shown}");
+            if mode == Previews::Hidden {
+                assert!(!shown.contains("Bob"), "{mode:?}: {shown}");
+                assert!(shown.contains("New message"), "{mode:?}: {shown}");
+            }
+            press(&mut app, &c, &[Click(B)]);
+            press(&mut app, &c, &[Long(A)]);
+            draw_panel(&mut app, grid, &c);
+            let list = body_texts(&app).join(" | ");
+            assert!(
+                !list.contains("Coffee") && !list.contains("Snow"),
+                "{mode:?}: {list}"
+            );
+            // Opened, the conversation shows the message.
+            press(&mut app, &c, &[Click(A), Long(A)]);
+            draw_panel(&mut app, grid, &c);
+            assert!(body_texts(&app).iter().any(|t| t.contains("Coffee")));
+            // The text version (terminal) too.
+            let mut app = App::new(grid, false);
+            app.event(&e, &c);
+            let screen = text(&mut app, grid, &c);
+            assert!(!screen.contains("Coffee"), "{mode:?}:\n{screen}");
+            if mode == Previews::Hidden {
+                assert!(!screen.contains("New message: Bob"), "{mode:?}:\n{screen}");
+            }
+        }
+    }
+}

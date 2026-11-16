@@ -239,10 +239,8 @@ impl Screen for Channels {
                 bold: unread > 0,
                 right: last.map_or_else(String::new, |m| clock::ago(m.at, ui.ctx.unix)),
                 sub: Some(match last {
-                    Some(m) if m.outgoing => {
-                        format!("You: {}", String::from_utf8_lossy(&m.text))
-                    }
-                    Some(m) => String::from(String::from_utf8_lossy(&m.text)),
+                    Some(m) if m.outgoing => format!("You: {}", super::preview_text(ui, m)),
+                    Some(m) => super::preview_text(ui, m),
                     None if muted => String::from("Muted"),
                     None => String::from("No messages"),
                 }),

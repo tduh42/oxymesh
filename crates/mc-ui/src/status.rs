@@ -333,7 +333,11 @@ fn messages(c: &Ctx<'_>) -> [String; 5] {
         } else {
             ' '
         };
-        let text = String::from_utf8_lossy(&m.text);
+        let text = if c.dev.node.prefs.ui.previews.text() {
+            String::from(String::from_utf8_lossy(&m.text))
+        } else {
+            String::from(crate::screens::HIDDEN_TEXT)
+        };
         *slot = format!("{mark}{}: {text}", peer_name(c, m.peer));
         n += 1;
     }

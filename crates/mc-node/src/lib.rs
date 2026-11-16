@@ -31,4 +31,4 @@ pub mod rx;
 pub mod tables;
 
 pub use device::{Action, Device, Info, Storage};
-pub use node::{Event, Node, Prefs, SendError, Sent, UiPrefs};
+pub use node::{Event, Node, Prefs, Previews, SendError, Sent, UiPrefs};

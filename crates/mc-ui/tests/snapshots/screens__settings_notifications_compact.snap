@@ -5,7 +5,7 @@ expression: "text(&mut app, grid, &c)"
 |Notifications        ●2 18:33 87%|
 |► Buzzer                       on|
 |  LED on unread                on|
-|                                 |
+|  Previews                  shown|
 |                                 |
 |                                 |
 |                                 |
