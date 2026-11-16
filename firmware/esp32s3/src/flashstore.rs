@@ -130,6 +130,10 @@ fn blob_key(key: &[u8; 32]) -> u32 {
     BLOB_BASE | (u32::from_le_bytes([key[0], key[1], key[2], key[3]]) >> 1)
 }
 
+/// The storage could not be read (as opposed to holding nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreadable;
+
 pub struct FlashStore<S: NorFlash> {
     map: MapStorage<u32, S, Cache<Uncached, Uncached, Uncached, u32>>,
     buf: [u8; BUF],
@@ -175,13 +179,13 @@ impl<S: NorFlash> FlashStore<S> {
 
     /// Stored identity: expanded private key (64) then public key (32). `Err` when the storage
     /// cannot be read, which must not be taken for a first boot (that would replace the key).
-    pub fn identity(&mut self) -> Result<Option<[u8; 64]>, ()> {
+    pub fn identity(&mut self) -> Result<Option<[u8; 64]>, Unreadable> {
         let mut b = [0u8; 96];
         let v: Option<&[u8]> =
-            block_on(self.map.fetch_item(&mut self.buf, &KEY_IDENTITY)).map_err(|_| ())?;
+            block_on(self.map.fetch_item(&mut self.buf, &KEY_IDENTITY)).map_err(|_| Unreadable)?;
         let Some(v) = v else { return Ok(None) };
         if v.len() != 96 {
-            return Err(());
+            return Err(Unreadable);
         }
         b.copy_from_slice(v);
         let mut prv = [0u8; 64];
@@ -210,10 +214,9 @@ impl<S: NorFlash> FlashStore<S> {
             if self.get(CONTACT_BASE + i as u32, &mut rec) == Some(CONTACT_RECORD)
                 && let Some(c) = decode_contact(&rec)
                 && node.contacts.list.push(c).is_ok()
+                && let Some(s) = self.saved.get_mut(node.contacts.list.len() - 1)
             {
-                if let Some(s) = self.saved.get_mut(node.contacts.list.len() - 1) {
-                    *s = crc32(&rec);
-                }
+                *s = crc32(&rec);
             }
         }
         self.saved_count = node.contacts.list.len();

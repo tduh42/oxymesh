@@ -132,19 +132,21 @@ mod boots {
         let r = esp_hal::system::reset_reason().map_or(0, |r| r as u32);
         // SAFETY: written once at boot, before anything else runs; read only afterwards.
         unsafe {
-            let b = &mut *(&raw mut BOOTS);
+            let p = &raw mut BOOTS;
+            let mut b = p.read();
             if b[0] != MAGIC {
-                *b = [MAGIC, 0, 0, 0, 0];
+                b = [MAGIC, 0, 0, 0, 0];
             }
             b.copy_within(2..5, 1);
             b[4] = r;
+            p.write(b);
         }
     }
 
     #[cfg_attr(not(feature = "debug-log"), allow(dead_code))]
     pub fn last() -> [u32; 4] {
         // SAFETY: see `note`.
-        let b = unsafe { *(&raw const BOOTS) };
+        let b = unsafe { (&raw const BOOTS).read() };
         [b[1], b[2], b[3], b[4]]
     }
 }
@@ -232,14 +234,14 @@ mod diag {
             self.passes = 0;
             self.busy_us = 0;
             self.window = embassy_time::Instant::now();
-            if self.reads % 6 == 0 {
+            if self.reads.is_multiple_of(6) {
                 if self.history.is_full() {
                     self.history.pop_front();
                 }
                 let min = (embassy_time::Instant::now().as_secs() / 60) as u32;
                 let _ = self.history.push_back((min, battery_mv, usb, noise));
             }
-            if self.reads % 6 == 0 {
+            if self.reads.is_multiple_of(6) {
                 let mut line: heapless::String<1800> = heapless::String::new();
                 for (m, mv, usb, nf) in &self.history {
                     let _ = core::fmt::write(
@@ -649,7 +651,7 @@ async fn main(_spawner: Spawner) -> ! {
                 store.add_bond(&b);
                 ble_sh.paired.set(store.bonds().len() as u8);
             }
-            let ble = ble_of(&ble_sh);
+            let ble = ble_of(ble_sh);
             if ble != last_ble {
                 last_ble = ble;
                 want_draw = true;
@@ -721,7 +723,7 @@ async fn main(_spawner: Spawner) -> ! {
                 let _ = events.push(e);
             }
             {
-                let c = ui_ctx(dev, ble_of(&ble_sh), charging, light);
+                let c = ui_ctx(dev, ble_of(ble_sh), charging, light);
                 let phone = ble_sh.state.get() == mc_ui::BleState::Connected;
                 for e in &events {
                     app.event(e, &c);
@@ -842,7 +844,7 @@ async fn main(_spawner: Spawner) -> ! {
                     }
                     _ => {}
                 }
-                let c = ui_ctx(dev, ble_of(&ble_sh), charging, light);
+                let c = ui_ctx(dev, ble_of(ble_sh), charging, light);
                 app.done(&i, &o, &c);
                 if app.sync(&c) {
                     drop(term);
@@ -883,9 +885,11 @@ async fn main(_spawner: Spawner) -> ! {
 
             // Drawing: on changes, the minute, a battery step of 5 %; never while BUSY.
             let minute = dev.node.rtc.now(mc_now()) / 60;
-            let pct = (dev.battery_mv > 0)
-                .then(|| percent(dev.battery_mv))
-                .unwrap_or(0);
+            let pct = if dev.battery_mv > 0 {
+                percent(dev.battery_mv)
+            } else {
+                0
+            };
             if minute != last_minute || pct.abs_diff(last_percent) >= 5 {
                 last_minute = minute;
                 last_percent = pct;
@@ -896,7 +900,7 @@ async fn main(_spawner: Spawner) -> ! {
                 let [cur, prev] = &mut *frames;
                 if want_draw {
                     want_draw = false;
-                    let c = ui_ctx(dev, ble_of(&ble_sh), charging, light);
+                    let c = ui_ctx(dev, ble_of(ble_sh), charging, light);
                     #[cfg(feature = "debug-log")]
                     let t0 = Instant::now();
                     let _ = term.draw(|f| app.draw(f, &c));

@@ -165,7 +165,7 @@ pub fn identity<'a, 'd: 'a>(
 ) -> LocalIdentity {
     match store.identity() {
         Ok(Some(prv)) => LocalIdentity::from_private(&prv),
-        Err(()) => panic!("mcdata unreadable: the identity is left alone"),
+        Err(_) => panic!("mcdata unreadable: the identity is left alone"),
         Ok(None) => {
             let imported = cpp().and_then(|mut fs| match repeater::import(&mut fs, role, store) {
                 Ok(s) => {

@@ -33,8 +33,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: firmware/esp32s3
-      - run: cargo build --release
-        working-directory: firmware/esp32s3
+      # Format, clippy (also with `debug-log`), release build, image size.
+      - run: scripts/firmware-ci.sh
 
   fuzz:
     runs-on: ubuntu-latest

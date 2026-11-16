@@ -117,7 +117,8 @@ async fn main(_spawner: Spawner) -> ! {
             go = true;
         }
         // Unattended: switch grids every 6 frames as if B were pressed.
-        let auto_switch = demo.frame > 0 && demo.frame % 6 == 0 && Instant::now() >= next_auto;
+        let auto_switch =
+            demo.frame > 0 && demo.frame.is_multiple_of(6) && Instant::now() >= next_auto;
         if (b && !b_was) || auto_switch {
             grid = if grid == LARGE { COMPACT } else { LARGE };
             drop(term);
@@ -148,7 +149,7 @@ async fn main(_spawner: Spawner) -> ! {
             prev.bits = cur.bits;
             cur.bits = term.backend().display().bits;
             let t1 = Instant::now();
-            let full = partials % 30 == 0;
+            let full = partials.is_multiple_of(30);
             let _ = if full {
                 epd.show_full(cur)
             } else {
