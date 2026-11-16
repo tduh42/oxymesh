@@ -382,7 +382,7 @@ fn render_tour(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-const HELP: [&str; 11] = [
+const HELP: [&str; 13] = [
     "j ↓   A click: next",
     "k ↑   A double: previous",
     "Enter A long: open",
@@ -390,6 +390,8 @@ const HELP: [&str; 11] = [
     "Esc ⌫ B click: back",
     "h     B double: Home",
     "l     B long: light",
+    "3     B ×3: buzzer (Home)",
+    "4     B ×4: previews (Home)",
     "g     text size",
     "p     phone: pair, connect, leave",
     "q     quit",
@@ -521,6 +523,8 @@ fn emulate(grid: &mut Grid) -> std::io::Result<()> {
                 KeyCode::Enter => Some(Gesture::Long(Button::A)),
                 KeyCode::Esc | KeyCode::Backspace => Some(Gesture::Click(Button::B)),
                 KeyCode::Char('h') => Some(Gesture::Double(Button::B)),
+                KeyCode::Char('3') => Some(Gesture::Triple(Button::B)),
+                KeyCode::Char('4') => Some(Gesture::Quad(Button::B)),
                 KeyCode::Char('l') => Some(Gesture::Long(Button::B)),
                 KeyCode::Char(' ') => {
                     if hold_since.take().is_some() {

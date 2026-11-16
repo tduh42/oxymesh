@@ -268,6 +268,11 @@ impl App {
         self.screen_changed = true;
     }
 
+    /// The toast showing, if any (tests).
+    pub fn toast_text(&self) -> Option<&str> {
+        self.toast.as_ref().map(|(t, _)| t.as_str())
+    }
+
     pub fn depth(&self) -> usize {
         self.stack.len()
     }
@@ -421,7 +426,10 @@ impl App {
                     }
                     return;
                 }
-                Gesture::Click(Button::B) | Gesture::Double(Button::B) => {
+                Gesture::Click(Button::B)
+                | Gesture::Double(Button::B)
+                | Gesture::Triple(Button::B)
+                | Gesture::Quad(Button::B) => {
                     self.banner = None;
                     return;
                 }
@@ -429,7 +437,28 @@ impl App {
             }
         }
         match g {
-            Gesture::Double(Button::B) => {
+            // Home's shortcuts (`docs/spec/ui.md` §3): B ×3 the buzzer, B ×4 the previews.
+            Gesture::Triple(Button::B) | Gesture::Quad(Button::B)
+                if self.stack.len() == 1 && self.popup.is_none() =>
+            {
+                let mut u = ctx.dev.node.prefs.ui;
+                let toast = if g == Gesture::Triple(Button::B) {
+                    u.buzzer = (u.buzzer.min(2) + 1) % 3;
+                    ["Buzzer: off", "Buzzer: quiet", "Buzzer: on"][usize::from(u.buzzer)]
+                } else {
+                    u.previews = mc_node::Previews::from_u8((u.previews.to_u8() + 1) % 3);
+                    match u.previews {
+                        mc_node::Previews::Shown => "Previews: shown",
+                        mc_node::Previews::Sender => "Previews: sender only",
+                        mc_node::Previews::Hidden => "Previews: hidden",
+                    }
+                };
+                self.intents.push(Intent::SetUi(u));
+                self.toast(toast, ctx.now_ms);
+                return;
+            }
+            // Elsewhere, more than two presses of B are a double click: Home.
+            Gesture::Double(Button::B) | Gesture::Triple(Button::B) | Gesture::Quad(Button::B) => {
                 self.popup = None;
                 if self.stack.len() > 1 {
                     self.stack.truncate(1);

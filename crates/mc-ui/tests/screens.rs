@@ -740,3 +740,81 @@ fn message_previews_hide_the_text_and_the_sender() {
         }
     }
 }
+
+/// Home's shortcuts: B ×3 cycles the buzzer, B ×4 the message previews, each with a toast;
+/// elsewhere they go Home like a double click.
+#[test]
+fn home_shortcuts_cycle_the_buzzer_and_the_previews() {
+    use mc_node::Previews;
+    for (from, to, toast) in [
+        (2u8, 0u8, "Buzzer: off"),
+        (0, 1, "Buzzer: quiet"),
+        (1, 2, "Buzzer: on"),
+    ] {
+        let mut w = world();
+        w.nodes[0].dev.node.prefs.ui.buzzer = from;
+        let c = ctx(&w);
+        let mut app = App::new(LARGE, true);
+        let mut u = w.nodes[0].dev.node.prefs.ui;
+        u.buzzer = to;
+        assert_eq!(press(&mut app, &c, &[Triple(B)]), vec![Intent::SetUi(u)]);
+        assert_eq!(app.toast_text(), Some(toast));
+    }
+    for (from, to, toast) in [
+        (Previews::Shown, Previews::Sender, "Previews: sender only"),
+        (Previews::Sender, Previews::Hidden, "Previews: hidden"),
+        (Previews::Hidden, Previews::Shown, "Previews: shown"),
+    ] {
+        let mut w = world();
+        w.nodes[0].dev.node.prefs.ui.previews = from;
+        let c = ctx(&w);
+        let mut app = App::new(LARGE, true);
+        let mut u = w.nodes[0].dev.node.prefs.ui;
+        u.previews = to;
+        assert_eq!(press(&mut app, &c, &[Quad(B)]), vec![Intent::SetUi(u)]);
+        assert_eq!(app.toast_text(), Some(toast));
+    }
+    // Elsewhere B ×3 and B ×4 go Home, changing nothing.
+    let w = world();
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, true);
+    for g in [Triple(B), Quad(B)] {
+        press(&mut app, &c, &[Click(A), Long(A)]);
+        text(&mut app, LARGE, &c);
+        assert!(app.depth() > 1);
+        assert!(press(&mut app, &c, &[g]).is_empty());
+        assert_eq!(app.depth(), 1);
+    }
+}
+
+/// While previews are not shown, a lock shows in the header.
+#[test]
+fn the_header_shows_a_lock_while_previews_are_off() {
+    use mc_node::Previews;
+    use mc_ui::scene::{Icon, Item};
+    for (mode, lock) in [
+        (Previews::Shown, false),
+        (Previews::Sender, true),
+        (Previews::Hidden, true),
+    ] {
+        let mut w = world();
+        w.nodes[0].dev.node.prefs.ui.previews = mode;
+        let c = ctx(&w);
+        let mut app = App::new(LARGE, true);
+        draw_panel(&mut app, LARGE, &c);
+        let header = app.overlays().iter().rev().nth(1).cloned();
+        let Some(overlay::Overlay::Scene { scene, .. }) = header else {
+            panic!("no header scene");
+        };
+        let has = scene.items.iter().any(|i| {
+            matches!(
+                i,
+                Item::Icon {
+                    icon: Icon::Lock,
+                    ..
+                }
+            )
+        });
+        assert_eq!(has, lock, "{mode:?}");
+    }
+}

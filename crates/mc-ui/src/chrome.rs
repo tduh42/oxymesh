@@ -253,6 +253,10 @@ pub fn header_scene(w: u16, h: u16, title: &str, time: bool, ui: &Ui<'_>) -> Sce
     if c.light {
         right(&mut sc, &mut x, None, Some(Icon::Sun));
     }
+    // Message previews hidden (Settings → Notifications, or B ×4 on Home).
+    if !c.dev.node.prefs.ui.previews.text() {
+        right(&mut sc, &mut x, None, Some(Icon::Lock));
+    }
     let unread = c.dev.unread_alerting();
     if unread > 0 {
         right(
