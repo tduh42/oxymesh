@@ -6,6 +6,8 @@
 //!   window after it has passed, since B also counts further presses);
 //! - `Triple`, `Quad`: three, four or more short presses of B, each within 300 ms of the last
 //!   (Home's shortcuts, `docs/spec/ui.md` §3);
+//! - while typing ([`Gestures::set_immediate_b`]), B neither waits nor counts: every short press
+//!   is a `Click` at its release (B deletes a character there, §7);
 //! - `Long`: released after 600 ms (and, for A, before the held ticks start at 1 s);
 //! - `Held`: while a button stays down past 1 s, one tick every 250 ms (the app takes the first
 //!   as a long press, hold-to-confirm dialogs count them down), then `HeldEnd` on release (A
@@ -82,6 +84,8 @@ impl Track {
 pub struct Gestures {
     a: Track,
     b: Track,
+    /// B's short presses are clicks at once (text entry).
+    immediate_b: bool,
     out: heapless::Deque<Gesture, 8>,
 }
 
@@ -96,6 +100,7 @@ impl Gestures {
         Self {
             a: Track::new(),
             b: Track::new(),
+            immediate_b: false,
             out: heapless::Deque::new(),
         }
     }
@@ -114,9 +119,17 @@ impl Gestures {
         let _ = self.out.push_back(g);
     }
 
+    /// While on, a short press of B is a `Click` at its release: no double-click window to
+    /// wait for, no counting. The runner sets it from `App::typing`, where B deletes one
+    /// character per press and several quick presses must delete several.
+    pub fn set_immediate_b(&mut self, on: bool) {
+        self.immediate_b = on;
+    }
+
     /// A raw edge: `pressed` is the new level of `button` at `now_ms`. Bounces closer than
     /// 30 ms to the previous edge are ignored.
     pub fn edge(&mut self, button: Button, pressed: bool, now_ms: u64) {
+        let immediate = button == Button::B && self.immediate_b;
         let t = self.track(button);
         if pressed == t.pressed
             || now_ms.saturating_sub(t.last_edge) < DEBOUNCE_MS && t.last_edge != 0
@@ -144,6 +157,9 @@ impl Gestures {
                     if button == Button::A && count >= 1 {
                         // A's double click at once: it is "previous" everywhere.
                         emit = Some(Gesture::Double(button));
+                        State::Idle
+                    } else if immediate {
+                        emit = Some(Gesture::Click(button));
                         State::Idle
                     } else {
                         State::WaitDouble {
@@ -334,6 +350,39 @@ mod tests {
             ),
             vec![Double(A), Click(A)]
         );
+    }
+
+    /// While typing, each short press of B is a click at once, however fast they come; a long
+    /// press still is one, and A is untouched.
+    #[test]
+    fn immediate_b_clicks_at_each_release() {
+        let mut g = Gestures::new();
+        g.set_immediate_b(true);
+        let mut out = Vec::new();
+        for i in 0..5u64 {
+            g.edge(B, true, 100 + i * 120);
+            g.edge(B, false, 160 + i * 120);
+            // Reported at the release itself, with nothing left to wait for.
+            assert_eq!(g.poll(160 + i * 120), Some(Click(B)));
+            assert_eq!(g.next_deadline(), None);
+            out.push(Click(B));
+        }
+        assert_eq!(out.len(), 5);
+        g.edge(B, true, 2000);
+        g.edge(B, false, 2700);
+        assert_eq!(g.poll(2700), Some(Long(B)));
+        g.edge(A, true, 3000);
+        g.edge(A, false, 3060);
+        assert_eq!(g.poll(3061), None, "A still waits for a double click");
+        assert_eq!(g.poll(3361), Some(Click(A)));
+        // Back to counting once typing ends.
+        g.set_immediate_b(false);
+        g.edge(B, true, 4000);
+        g.edge(B, false, 4060);
+        g.edge(B, true, 4200);
+        g.edge(B, false, 4260);
+        assert_eq!(g.poll(4261), None);
+        assert_eq!(g.poll(4561), Some(Double(B)));
     }
 
     #[test]

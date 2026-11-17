@@ -1,4 +1,5 @@
 fn main() {
+    build_time();
     linker_be_nice();
     check_xtensa_linker_available();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
@@ -129,4 +130,52 @@ fn linker_be_nice() {
         "cargo:rustc-link-arg=-Wl,--error-handling-script={}",
         std::env::current_exe().unwrap().display()
     );
+}
+
+/// The time of the commit this is built from, for `run::BOOT_EPOCH` (the clock's floor at
+/// boot) and `run::BUILD_DATE` (what the device reports). `SOURCE_DATE_EPOCH` overrides it;
+/// outside a git checkout it falls back to a fixed date.
+fn build_time() {
+    // 2026-11-05, the floor before this was computed.
+    const FALLBACK: u64 = 1_793_900_000;
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    let from_env = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    let from_git = || {
+        let out = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%ct"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout)
+            .ok()?
+            .trim()
+            .parse::<u64>()
+            .ok()
+    };
+    let epoch = from_env.or_else(from_git).unwrap_or(FALLBACK);
+    println!("cargo:rustc-env=OXYMESH_BUILD_EPOCH={epoch}");
+    println!("cargo:rustc-env=OXYMESH_BUILD_DATE={}", date(epoch));
+}
+
+/// `DD-Mon-YYYY` in UTC (days to civil date, Howard Hinnant's algorithm).
+fn date(epoch: u64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let z = (epoch / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{day:02}-{}-{year}", MONTHS[(month - 1) as usize])
 }

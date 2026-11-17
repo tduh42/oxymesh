@@ -545,7 +545,7 @@ impl Screen for Signal {
         let mins: Vec<_> = dev.minutes().iter().copied().collect();
         let per_min = mins.last().map(|m| m.rx).unwrap_or(0);
         let hour: u32 = mins.iter().map(|m| u32::from(m.rx)).sum();
-        let l = alloc::vec![
+        let mut l = alloc::vec![
             chrome::spread(
                 "Last",
                 &match last {
@@ -554,10 +554,22 @@ impl Screen for Signal {
                 },
                 w,
             ),
-            chrome::spread("Noise floor", &format!("{} dBm", dev.noise_floor), w),
+            chrome::spread("Noise floor", &super::noise_text(dev.noise_floor), w),
             chrome::spread("Packets", &format!("{per_min}/min {hour}/h"), w),
         ];
-        lines_to(f, rows(body, 0, 3), l);
+        // What the radio chip itself received since boot: packets it could read, and ones too
+        // weak or too noisy ("bad": something was on the air).
+        if let Some(rx) = ui.ctx.rx {
+            l.push(chrome::spread(
+                "Radio",
+                &format!("{} ok, {} bad", rx.ok, rx.damaged),
+                w,
+            ));
+        }
+        let n = l.len() as u16;
+        lines_to(f, rows(body, 0, n), l);
+        // The two charts share what is left under the lines and a blank row.
+        let body = rows(body, n - 3, body.height.saturating_sub(n - 3));
         let half = body.height.saturating_sub(4) / 2;
         f.render_widget(Paragraph::new("Noise floor, 1 h"), rows(body, 4, 1));
         let noise: Vec<u64> = mins
@@ -768,11 +780,12 @@ impl Screen for Gps {
                 chrome::spread("Lat", &geo::coord(g.lat, true), w),
                 chrome::spread("Lon", &geo::coord(g.lon, false), w),
             ],
-            None => alloc::vec![String::from(if p.gps_enabled {
-                "Waiting for a fix…"
-            } else {
-                "GPS off."
-            })],
+            None => alloc::vec![match (ui.ctx.dev.gps_active(), ui.ctx.gps_searching) {
+                (false, _) => String::from("GPS off."),
+                // The count tells an open sky from a room.
+                (true, Some(n)) => chrome::spread("Searching", &format!("{n} satellites"), w),
+                (true, None) => String::from("Waiting for a fix…"),
+            }],
         };
         l.push(chrome::spread(
             "Shared position",
@@ -823,6 +836,15 @@ impl Screen for Gps {
             );
         }
         Nav::Stay
+    }
+
+    fn footer(&self, ui: &Ui<'_>) -> Footer {
+        // Only "Share this position" does something on a hold, and it is there only with a fix.
+        let share = ui.ctx.gps.is_some() && self.state.selected().unwrap_or(0) == 0;
+        Footer {
+            a_hold: share.then_some("share"),
+            ..Footer::LIST
+        }
     }
 }
 
@@ -994,7 +1016,7 @@ impl Screen for Map {
         Footer {
             a_click: Some("out"),
             a_hold: Some("reset"),
-            a_double: None,
+            a_double: Some("in"),
             b_click: Some("back"),
             b_hold: None,
         }

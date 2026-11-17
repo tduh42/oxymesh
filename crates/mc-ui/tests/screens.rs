@@ -67,6 +67,9 @@ fn ctx(w: &mc_sim::World) -> Ctx<'_> {
         charging: false,
         light: false,
         ble: mc_ui::Ble::default(),
+        health: mc_ui::Health::default(),
+        gps_searching: None,
+        rx: None,
         gps: None,
     }
 }
@@ -110,6 +113,91 @@ fn back_pops_and_double_back_goes_home() {
     press(&mut app, &c, &[Click(B)]);
     assert_eq!(app.depth(), 1, "B on Home does nothing");
     assert_eq!(press(&mut app, &c, &[Long(B)]), vec![Intent::ToggleLight]);
+}
+
+/// About says why the device last started, and what went wrong since the power came on
+/// (ADR-0013): nothing more than the start when all is well.
+#[test]
+fn about_shows_the_devices_health() {
+    let w = world();
+    let to_about = [Double(A), Long(A), Double(A), Long(A), Long(A)];
+    let well = Ctx {
+        health: mc_ui::Health {
+            restart: "power on",
+            ..Default::default()
+        },
+        ..ctx(&w)
+    };
+    let mut app = App::new(COMPACT, false);
+    press(&mut app, &well, &to_about);
+    let screen = text(&mut app, COMPACT, &well);
+    assert!(
+        screen.contains("Started") && screen.contains("power on"),
+        "{screen}"
+    );
+    for absent in ["Errors", "Radio", "Storage"] {
+        assert!(!screen.contains(absent), "{absent} in {screen}");
+    }
+
+    let unwell = Ctx {
+        health: mc_ui::Health {
+            restart: "after an error",
+            panics: 2,
+            panic_at: Some(("firmware/esp32s3/src/run/radio.rs", 259)),
+            radio_recoveries: 1,
+            radio_down: false,
+            store_errors: 3,
+        },
+        ..ctx(&w)
+    };
+    let screen = text(&mut app, COMPACT, &unwell);
+    for line in [
+        "after an error",
+        "2 radio.rs:259",
+        "1 reset|",
+        "3 write errors",
+    ] {
+        assert!(screen.contains(line), "{line} not in {screen}");
+    }
+    let down = Ctx {
+        health: mc_ui::Health {
+            radio_down: true,
+            radio_recoveries: 4,
+            ..unwell.health
+        },
+        ..ctx(&w)
+    };
+    assert!(text(&mut app, COMPACT, &down).contains("not answering"));
+}
+
+/// Until something sets the clock, no screen shows a time of day: the node counts from its
+/// floor, which is not the time.
+#[test]
+fn an_unset_clock_shows_no_time() {
+    let mut w = world();
+    let now = w.now;
+    w.nodes[0].dev.node.rtc = mc_node::clock::Rtc::new(mc_sim::EPOCH, now);
+    {
+        let c = ctx(&w);
+        let mut app = App::new(LARGE, false);
+        let home = text(&mut app, LARGE, &c);
+        assert!(home.contains("--:--"), "{home}");
+        assert!(home.contains("Clock not set"), "{home}");
+        let mut panel = App::new(LARGE, true);
+        draw_panel(&mut panel, LARGE, &c);
+        let texts = body_texts(&panel);
+        assert!(texts.iter().any(|t| t == "--:--"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Clock not set"), "{texts:?}");
+    }
+    // An app or the GPS sets it: the time shows.
+    w.nodes[0].dev.node.rtc.set(now, mc_sim::EPOCH + 30);
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, false);
+    let home = text(&mut app, LARGE, &c);
+    assert!(
+        !home.contains("--:--") && !home.contains("Clock not set"),
+        "{home}"
+    );
 }
 
 #[test]
@@ -262,7 +350,7 @@ fn overlays_never_go_stale_on_the_panel() {
             }
             press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
             t.draw(|f| app.draw(f, &c)).unwrap();
-            assert!(body_overlays(&app).is_empty());
+            assert_eq!(body_overlays(&app).len(), 1, "the menu's scene");
             for o in app.overlays() {
                 overlay::draw(o, t.backend_mut().display_mut()).unwrap();
             }
@@ -326,6 +414,10 @@ fn pairing_covers_the_screen_with_the_pin() {
         let t = text(&mut app, grid, &c);
         assert!(t.contains("048 213"), "{t}");
         insta::assert_snapshot!(format!("ble_pairing_{size}"), t);
+        // The PIN hides the screen: presses do not act on it, the light still answers.
+        press(&mut app, &c, &[Long(A), Click(A), Double(A), Double(B)]);
+        assert_eq!(app.depth(), 1, "nothing opened behind the PIN");
+        assert_eq!(press(&mut app, &c, &[Long(B)]), vec![Intent::ToggleLight]);
         // On the panel, big digits over those cells and nothing else painted.
         let mut app = App::new(grid, true);
         let mut frame = Frame::new();
@@ -507,13 +599,13 @@ fn draw_panel(app: &mut App, grid: Grid, c: &Ctx<'_>) {
     t.draw(|f| app.draw(f, c)).unwrap();
 }
 
-/// Home, the lists, a conversation and a contact draw their body in pixels; the rest stays
-/// text.
+/// Home, the lists, a conversation, a contact, a channel, the menus and the pickers draw
+/// their body in pixels; the tool pages stay text.
 #[test]
 fn main_screens_draw_their_body_in_pixels() {
     let w = world();
     let c = ctx(&w);
-    let cases: [(&[Gesture], &[&str]); 6] = [
+    let cases: [(&[Gesture], &[&str]); 10] = [
         (
             &[],
             &["Messages", "Contacts", "Map", "Bob", "Coffee at the refuge"],
@@ -525,6 +617,41 @@ fn main_screens_draw_their_body_in_pixels() {
         (
             &[Click(A), Long(A), Long(A)],
             &["Write", "Messages", "Ping", "Trace route", "Remove"],
+        ),
+        // Tools and Settings, with each item's value on the right.
+        (
+            &[Click(A), Click(A), Click(A), Long(A)],
+            &["Heard nodes", "Discover", "Signal", "Repeater admin"],
+        ),
+        (
+            &[Double(A), Long(A)],
+            &["Radio", "SF", "Identity", "Morgan", "Bluetooth", "Display"],
+        ),
+        // A settings page (no icons), and a picker.
+        (
+            &[
+                Double(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+            ],
+            &["Text size", "large", "Light off", "Invert"],
+        ),
+        (
+            &[
+                Double(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Long(A),
+            ],
+            &["Large (25×15)", "Compact (33×20)"],
         ),
     ];
     for grid in [LARGE, COMPACT] {
@@ -545,11 +672,211 @@ fn main_screens_draw_their_body_in_pixels() {
                 );
             }
         }
-        // Tools stays a text list.
+        // A tool page stays text: Tools → Heard nodes.
         let mut app = App::new(grid, true);
-        press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
+        press(
+            &mut app,
+            &c,
+            &[Click(A), Click(A), Click(A), Long(A), Long(A)],
+        );
         draw_panel(&mut app, grid, &c);
         assert!(body_overlays(&app).is_empty());
+    }
+}
+
+/// A channel that has nothing unread opens on its own page: a card like a contact's, with its
+/// four actions as tiles.
+#[test]
+fn a_channel_page_is_a_card_with_its_actions() {
+    let mut w = world();
+    {
+        let sn = &mut w.nodes[0];
+        sn.dev
+            .mark_read(mc_node::history::Peer::Channel(0), &mut sn.st);
+    }
+    let c = ctx(&w);
+    for grid in [LARGE, COMPACT] {
+        let mut app = App::new(grid, true);
+        // Channels, past "Add #channel", open.
+        press(
+            &mut app,
+            &c,
+            &[Click(A), Click(A), Long(A), Click(A), Long(A)],
+        );
+        draw_panel(&mut app, grid, &c);
+        let texts = body_texts(&app);
+        for want in [
+            "Public",
+            "Channel · slot 0",
+            "0 unread",
+            "Notifies like a direct message",
+            "Messages",
+            "Write",
+            "Mute",
+            "Remove",
+        ] {
+            assert!(
+                texts.iter().any(|t| t.contains(want)),
+                "{want:?} missing from {texts:?}"
+            );
+        }
+    }
+    // Muted: the page says so, and the tile offers the way back.
+    let muted = w.nodes[0].dev.node.prefs.ui.with_muted(0, true);
+    {
+        let sn = &mut w.nodes[0];
+        sn.dev.set_ui(muted, &mut sn.st);
+    }
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, true);
+    press(
+        &mut app,
+        &c,
+        &[Click(A), Click(A), Long(A), Click(A), Long(A)],
+    );
+    draw_panel(&mut app, LARGE, &c);
+    let texts = body_texts(&app);
+    assert!(texts.iter().any(|t| t == "Unmute"), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("Muted")), "{texts:?}");
+}
+
+/// A menu's top items carry an icon, a settings page starts at the margin, and a picker marks
+/// the current value with a check.
+#[test]
+fn menus_and_pickers_are_pixel_lists() {
+    use mc_ui::scene::{Icon, Item};
+    let w = world();
+    let c = ctx(&w);
+    let scene_of = |gestures: &[Gesture]| {
+        let mut app = App::new(LARGE, true);
+        press(&mut app, &c, gestures);
+        draw_panel(&mut app, LARGE, &c);
+        match body_overlays(&app).as_slice() {
+            [overlay::Overlay::Scene { scene, .. }] => scene.clone(),
+            other => panic!("{gestures:?}: {other:?}"),
+        }
+    };
+    let icons = |sc: &mc_ui::scene::Scene| -> Vec<Icon> {
+        sc.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Icon { icon, .. } => Some(*icon),
+                _ => None,
+            })
+            .collect()
+    };
+    let x_of = |sc: &mc_ui::scene::Scene, text: &str| {
+        sc.items.iter().find_map(|i| match i {
+            Item::Text { x, text: t, .. } if t == text => Some(*x),
+            _ => None,
+        })
+    };
+    let settings = scene_of(&[Double(A), Long(A)]);
+    assert_eq!(
+        icons(&settings).first().copied(),
+        Some(Icon::Broadcast),
+        "Radio's icon"
+    );
+    assert!(icons(&settings).len() >= 6, "{:?}", icons(&settings));
+    assert_eq!(x_of(&settings, "Radio"), Some(32), "past the icon");
+    let display = scene_of(&[
+        Double(A),
+        Long(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Long(A),
+    ]);
+    assert!(icons(&display).is_empty());
+    assert_eq!(x_of(&display, "Text size"), Some(8), "at the margin");
+    let picker = scene_of(&[
+        Double(A),
+        Long(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Long(A),
+        Long(A),
+    ]);
+    assert_eq!(icons(&picker), vec![Icon::Check], "the current value only");
+    assert_eq!(
+        x_of(&picker, "Large (25×15)"),
+        x_of(&picker, "Compact (33×20)"),
+        "aligned past the check"
+    );
+}
+
+/// On the panel the hold-to-confirm popup is a card over the faded screen, which stays drawn
+/// in pixels under it; its bar fills while A is held.
+#[test]
+fn the_confirm_popup_is_a_card_over_the_faded_screen() {
+    use mc_ui::scene::Item;
+    let w = world();
+    let c = ctx(&w);
+    for grid in [LARGE, COMPACT] {
+        let mut app = App::new(grid, true);
+        // Settings → System (last) → Reboot (third).
+        press(
+            &mut app,
+            &c,
+            &[
+                Double(A),
+                Long(A),
+                Double(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Long(A),
+            ],
+        );
+        assert!(app.popup().is_some());
+        draw_panel(&mut app, grid, &c);
+        let body = body_overlays(&app);
+        let [
+            overlay::Overlay::Scene { scene: under, .. },
+            overlay::Overlay::Over { scene, .. },
+        ] = body.as_slice()
+        else {
+            panic!("the menu, then the card: {body:?}");
+        };
+        assert!(under.texts().contains(&"Reboot"), "the menu is still there");
+        assert!(scene.items.iter().any(|i| matches!(i, Item::Dither { .. })));
+        let texts = scene.texts();
+        for want in [
+            "Reboot",
+            "Restart the device.",
+            "Hold A to confirm",
+            "2.0 s",
+        ] {
+            assert!(texts.contains(&want), "{want:?} not in {texts:?}");
+        }
+        let filled = |sc: &mc_ui::scene::Scene| {
+            sc.items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Rect {
+                        w,
+                        h: 9,
+                        fill: Some(true),
+                        ..
+                    } => Some(*w),
+                    _ => None,
+                })
+                .next()
+        };
+        assert_eq!(filled(scene), None, "an empty bar");
+        // Half the hold: half the bar, and the time left.
+        press(&mut app, &c, &[Held(A, 1000)]);
+        draw_panel(&mut app, grid, &c);
+        let body = body_overlays(&app);
+        let Some(overlay::Overlay::Over { scene, .. }) = body.last() else {
+            panic!("no card: {body:?}");
+        };
+        assert!(scene.texts().contains(&"1.0 s"), "{:?}", scene.texts());
+        let bar = filled(scene).expect("a bar");
+        assert!((80..=95).contains(&bar), "about half of 169: {bar}");
     }
 }
 
@@ -574,9 +901,10 @@ fn the_banner_is_a_card_over_the_faded_screen() {
         outgoing: false,
     };
     for grid in [LARGE, COMPACT] {
+        // Over Home (pixels), and over a tool page (text): Tools → Heard nodes.
         for (gestures, under) in [
             (&[][..], 1),
-            (&[Click(A), Click(A), Click(A), Long(A)][..], 0),
+            (&[Click(A), Click(A), Click(A), Long(A), Long(A)][..], 0),
         ] {
             let mut app = App::new(grid, true);
             press(&mut app, &c, gestures);
@@ -680,6 +1008,122 @@ fn holding_a_in_the_keyboard_inserts_once() {
         1,
         "{intents:?}"
     );
+}
+
+/// While the GPS searches, Home and the GPS tool say how many satellites it uses (an open sky
+/// reads differently from a room), and the noise floor shows no figure before its first round.
+#[test]
+fn a_searching_gps_counts_its_satellites() {
+    let mut w = world();
+    w.nodes[0].dev.info.has_gps = true;
+    w.nodes[0].dev.node.prefs.gps_enabled = true;
+    w.nodes[0].dev.noise_floor = 0;
+    let searching = Ctx {
+        gps: None,
+        gps_searching: Some(4),
+        ..ctx(&w)
+    };
+    let mut home = App::new(LARGE, true);
+    draw_panel(&mut home, LARGE, &searching);
+    let texts = body_texts(&home);
+    assert!(texts.iter().any(|t| t == "No fix, 4 sats"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "-- dBm"), "{texts:?}");
+    // A runner that cannot count says only that there is no fix.
+    let unknown = Ctx {
+        gps_searching: None,
+        ..searching
+    };
+    draw_panel(&mut home, LARGE, &unknown);
+    assert!(body_texts(&home).iter().any(|t| t == "GPS, no fix"));
+
+    // Tools (4th on Home's launcher) → GPS (9th tool).
+    let mut app = App::new(LARGE, false);
+    press(
+        &mut app,
+        &searching,
+        &[Click(A), Click(A), Click(A), Long(A)],
+    );
+    press(&mut app, &searching, &[Click(A); 8]);
+    press(&mut app, &searching, &[Long(A)]);
+    let tool = text(&mut app, LARGE, &searching);
+    assert!(
+        tool.contains("Searching") && tool.contains("4 satellites"),
+        "{tool}"
+    );
+    assert!(
+        !tool.contains("hold"),
+        "nothing to hold without a fix: {tool}"
+    );
+    assert!(text(&mut app, LARGE, &unknown).contains("Waiting for a fix"));
+    w.nodes[0].dev.node.prefs.gps_enabled = false;
+    let off = Ctx {
+        gps: None,
+        ..ctx(&w)
+    };
+    assert!(text(&mut app, LARGE, &off).contains("GPS off."));
+}
+
+/// The Signal tool shows what the radio chip itself received: readable packets, and ones too
+/// weak or too noisy to read (something was on the air).
+#[test]
+fn the_signal_tool_counts_what_the_chip_received() {
+    let w = world();
+    let c = Ctx {
+        rx: Some(mc_ui::RxSeen {
+            ok: 412,
+            damaged: 15,
+        }),
+        ..ctx(&w)
+    };
+    for grid in [LARGE, COMPACT] {
+        let mut app = App::new(grid, false);
+        // Tools → Signal (5th tool).
+        press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
+        press(&mut app, &c, &[Click(A); 4]);
+        press(&mut app, &c, &[Long(A)]);
+        let s = text(&mut app, grid, &c);
+        assert!(s.contains("412 ok, 15 bad"), "{s}");
+        // Both charts are still there under the extra line.
+        assert!(
+            s.contains("Noise floor, 1 h") && s.contains("Packets per minute"),
+            "{s}"
+        );
+        // A runner that does not count shows no such line.
+        let none = Ctx { rx: None, ..c };
+        assert!(!text(&mut app, grid, &none).contains("Radio"));
+    }
+}
+
+/// While typing, B deletes one character per press, however fast: presses the recognizer
+/// counted as a double click or more never go Home with the text, and the press that cancels
+/// the entry is the last one taken.
+#[test]
+fn quick_deletes_never_throw_the_text_away() {
+    let w = world();
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, false);
+    // Messages, Bob, write; insert "OK" (the first quick reply) twice over.
+    press(&mut app, &c, &[Long(A), Click(A), Long(A), Long(A)]);
+    text(&mut app, LARGE, &c);
+    assert!(app.typing());
+    let typing_depth = app.depth();
+    press(&mut app, &c, &[Long(A)]);
+    assert_eq!(app.keyboard().unwrap().text, "OK");
+    // A double click of B: two deletes, still typing.
+    press(&mut app, &c, &[Double(B)]);
+    assert_eq!(app.keyboard().unwrap().text, "");
+    assert_eq!(app.depth(), typing_depth);
+    // Four presses on an empty text: the first cancels the entry, the rest are dropped.
+    press(&mut app, &c, &[Quad(B)]);
+    assert!(!app.typing());
+    assert_eq!(
+        app.depth(),
+        typing_depth - 1,
+        "back on the conversation only"
+    );
+    // Outside text entry a double click of B still goes Home.
+    press(&mut app, &c, &[Double(B)]);
+    assert_eq!(app.depth(), 1);
 }
 
 /// Message previews off: the banner, Home and the lists show no text ("Sender only"), and

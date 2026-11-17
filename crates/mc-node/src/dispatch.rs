@@ -91,7 +91,8 @@ pub struct Stats {
     pub recv_errors: u32,
     pub tx_airtime_ms: u64,
     pub rx_airtime_ms: u64,
-    /// C++ `ERR_EVENT_*`: 1 pool full, 2 listen before talk too long.
+    /// C++ `ERR_EVENT_*`: 1 pool full, 2 listen before talk too long, 4 radio stuck outside
+    /// receive mode.
     pub err_flags: u16,
     pub dropped_full: u32,
     /// Decoded, but refused by `PacketBuf::from_packet` (diagnostics; not in `GET_STATS`).
@@ -100,6 +101,9 @@ pub struct Stats {
 
 pub const ERR_EVENT_FULL: u16 = 1 << 0;
 pub const ERR_EVENT_CAD_TIMEOUT: u16 = 1 << 1;
+/// The radio stayed outside receive mode (`Dispatcher.h`; set by the runner, which then resets
+/// the chip: `mc_core::radio_health`).
+pub const ERR_EVENT_STARTRX_TIMEOUT: u16 = 1 << 2;
 
 /// `airtime_factor` × 1000 (the C++ keeps it as a `float`, default 1.0).
 const fn duty_div(af_milli: u32) -> u64 {

@@ -38,13 +38,13 @@ use mc_node::Prefs;
 use mc_node::device::{Action, FrontEnd, Info};
 use mc_ui::input::{Button, Gestures};
 use mc_ui::status::{Oled, Status};
-use mc_ui::{Ble, Ctx, Intent, Outcome, perform};
+use mc_ui::{Ble, Ctx, Health, Intent, Outcome, perform};
 use oxymesh_esp32s3::battery::{Smoother, percent};
 use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::heltec_v4::{self as board, Fem, UsbWire};
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, Radio, Tx};
-use oxymesh_esp32s3::run::{self, Deadline, boot, mc_now};
+use oxymesh_esp32s3::run::{self, BOOT_EPOCH, Deadline, boot, crash, mc_now};
 use oxymesh_esp32s3::ssd1306::Ssd1306;
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -58,7 +58,7 @@ const INFO: Info = Info {
     // Replaced at boot by the name of the front end found ("Heltec V4.3 OLED").
     manufacturer: "Heltec V4 OLED",
     version: "v1.18.0-oxymesh",
-    build_date: "09-Nov-2026",
+    build_date: run::BUILD_DATE,
     max_tx_power: board::TX_POWER_MAX,
     has_gps: false,
     front_end: FrontEnd::Pa,
@@ -68,8 +68,6 @@ const INFO: Info = Info {
 const HEAP_SIZE: usize = 24 * 1024;
 /// Second heap region, in the RAM the bootloader gives back.
 const HEAP_RECLAIMED: usize = 72 * 1024;
-/// The clock at boot until a phone sets it (no clock chip on this board).
-const BOOT_EPOCH: u32 = 1_793_900_000;
 /// Screen ticks (notes expiring, the clock).
 const UI_TICK_MS: u64 = 500;
 /// The screen goes dark after this long without a press, unless the settings say otherwise.
@@ -99,7 +97,13 @@ fn ctx(dev: &Device, ble: Ble, charging: bool) -> Ctx<'_> {
         charging,
         light: true,
         gps: None,
+        gps_searching: None,
         ble,
+        health: Health {
+            restart: crash::restart(),
+            ..Default::default()
+        },
+        rx: None,
     }
 }
 
@@ -110,7 +114,10 @@ async fn main(_spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: HEAP_RECLAIMED);
     #[cfg(feature = "debug-log")]
     esp_println::logger::init_logger_from_env();
+    crash::note();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    // From here on a loop that stops turning restarts the chip (ADR-0013).
+    let mut watchdog = crash::Watchdog::start(p.RTC_TIMER);
     let lpwr = p.LPWR;
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
@@ -149,11 +156,15 @@ async fn main(_spawner: Spawner) -> ! {
     let hw = esp_hal::rng::Rng::new();
     let mut rng =
         ChaCha20Rng::seed_from_u64((u64::from(hw.random()) << 32) | u64::from(hw.random()));
+    // Storage at boot has no fixed bound (a first boot imports the C++ firmware's data): the
+    // watchdog waits for the main loop (ADR-0013).
+    watchdog.stop();
     let id = boot::identity(&mut store, cpp_fs, &hw);
     let prefs = Prefs::defaults(id.pub_key());
     let dev = DEVICE.take();
     dev.node.reset(id, prefs, BOOT_EPOCH, mc_now());
     store.load(dev);
+    watchdog.resume();
     dev.connected = true; // USB: always connected.
 
     // Front end, then radio.
@@ -237,6 +248,7 @@ async fn main(_spawner: Spawner) -> ! {
         // Until then, the button is sampled every 10 ms after an edge (debounce).
         let mut button_settle = 0u64;
         loop {
+            watchdog.feed();
             let now = mc_now();
             link.poll(dev, ble_sh, now, &mut rng, &mut store);
             match radio.poll(
@@ -262,6 +274,7 @@ async fn main(_spawner: Spawner) -> ! {
                         esp_hal::system::software_reset();
                     }
                     Action::FactoryReset => {
+                        watchdog.stop();
                         store.erase_all();
                         Timer::after(Duration::from_millis(1000)).await;
                         esp_hal::system::software_reset();
@@ -326,6 +339,7 @@ async fn main(_spawner: Spawner) -> ! {
             for i in intents {
                 let o = perform(&i, dev, mc_now(), &mut rng, &mut store);
                 if o == Outcome::Hibernate {
+                    watchdog.stop();
                     dev.flush_contacts(&mut store);
                     if let Some(o) = oled.as_mut() {
                         let _ = o.power(false);

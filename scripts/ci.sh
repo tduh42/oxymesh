@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Local checks, identical to CI. Usage: scripts/ci.sh
 # CI_SKIP_FUZZ=1 skips the fuzz smoke test; FUZZ_SECS sets its duration per target (60 s).
-# CI_SKIP_FIRMWARE=1 skips the firmware build (requires the Xtensa `esp` toolchain).
+# CI_SKIP_FIRMWARE=1 skips the firmware checks (scripts/firmware-ci.sh; they need the Xtensa
+# `esp` toolchain).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -38,9 +39,8 @@ if [ "$found" -ne 0 ]; then echo "float found in a no_std crate" >&2; exit 1; fi
 
 step "firmware (esp32s3)"
 if [ "${CI_SKIP_FIRMWARE:-0}" != "1" ] && [ -f firmware/esp32s3/Cargo.toml ] && rustup toolchain list | grep -q '^esp'; then
-  # The Xtensa linker comes from the espup environment.
-  [ -f "$HOME/export-esp.sh" ] && . "$HOME/export-esp.sh"
-  (cd firmware/esp32s3 && cargo build --quiet --release)
+  # Format, clippy (also with `debug-log`), release build, image size.
+  scripts/firmware-ci.sh
 else
   echo "skipped: no firmware, CI_SKIP_FIRMWARE=1 or esp toolchain missing (espup install --targets esp32s3)"
 fi

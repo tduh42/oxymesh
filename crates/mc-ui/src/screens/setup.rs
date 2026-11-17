@@ -146,7 +146,7 @@ impl Screen for SetupTime {
 
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let c = ui.ctx;
-        let t = clock::local(c.unix, c.tz_offset_min);
+        let t = c.time();
         let state = match t {
             Some(_) => format!("Clock: {} {}", clock::hhmm(t), clock::date(t)),
             None => String::from("Clock not set yet."),

@@ -17,11 +17,14 @@ use crate::partition::{ReadOnly, Region};
 
 pub type Store<'a, 'd> = FlashStore<BlockingAsync<Region<'a, 'd>>>;
 
-/// `(offset, length)` of the `mcdata` partition and of the C++ firmware's `spiffs`.
-pub fn partitions(flash: &RefCell<FlashStorage<'_>>) -> (Option<(u32, u32)>, Option<(u32, u32)>) {
+/// A partition's `(offset, length)`.
+pub type Span = (u32, u32);
+
+/// The `mcdata` partition and the C++ firmware's `spiffs`.
+pub fn partitions(flash: &RefCell<FlashStorage<'_>>) -> (Option<Span>, Option<Span>) {
     let mut table = [0u8; PARTITION_TABLE_MAX_LEN];
     let mut f = flash.borrow_mut();
-    let t = read_partition_table(&mut *f, &mut table).ok();
+    let t = read_partition_table(&mut f, &mut table).ok();
     let find = |label: &str| {
         t.as_ref()
             .and_then(|t| t.iter().find(|e| e.label_as_str() == label))
@@ -61,7 +64,7 @@ pub fn identity<'a, 'd: 'a>(
 ) -> LocalIdentity {
     match store.identity() {
         Ok(Some(prv)) => LocalIdentity::from_private(&prv),
-        Err(()) => panic!("mcdata unreadable: the identity is left alone"),
+        Err(_) => panic!("mcdata unreadable: the identity is left alone"),
         Ok(None) => {
             let imported = cpp().and_then(|mut fs| {
                 match cpp::import(&mut fs, mc_node::node::UiPrefs::DEFAULT, store) {

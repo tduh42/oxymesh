@@ -1164,6 +1164,7 @@ dependencies = [
  "ratatui-crossterm",
  "ratatui-widgets",
  "serialport",
+ "signal-hook",
  "tokio",
  "uuid",
 ]

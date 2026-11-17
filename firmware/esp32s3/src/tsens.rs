@@ -5,8 +5,8 @@
 //!
 //! Only documented fields are touched (power-up and dump-out under software control). The
 //! sensor's range DAC sits behind the analog I2C bus, which esp-hal keeps private: it is left
-//! at its reset value, taken as the −10 to 80 °C range (offset 0). The reading is checked
-//! against the Heltec V4 (an ESP32-S3 running the C++) in `docs/measurements.md`.
+//! at its reset value, taken as the −10 to 80 °C range (offset 0). The reading has not been
+//! compared with another thermometer yet (`docs/measurements.md`, 2026-11-08: 42 to 50 °C).
 
 use esp_hal::efuse::{self, TEMP_CALIB};
 use esp_hal::peripherals::SENS;

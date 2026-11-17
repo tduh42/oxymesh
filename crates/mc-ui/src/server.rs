@@ -187,7 +187,13 @@ fn duration(s: u32) -> String {
 }
 
 fn home(v: &View<'_>) -> [String; 5] {
-    let t = clock::local(v.node.rtc.now(v.now), v.tz_offset_min);
+    // No time to show until something set the clock.
+    let t = v
+        .node
+        .rtc
+        .is_set()
+        .then(|| clock::local(v.node.rtc.now(v.now), v.tz_offset_min))
+        .flatten();
     let fwd = v.node.routing.as_ref().is_some_and(|r| !r.disable_fwd);
     let acl = v
         .server
@@ -244,7 +250,10 @@ fn radio(v: &View<'_>) -> [String; 5] {
             r.cr
         ),
         format!("TX {} dBm", r.tx_power_dbm),
-        format!("Noise {} dBm", v.server.board.noise_floor),
+        format!(
+            "Noise {}",
+            crate::screens::noise_text(v.server.board.noise_floor)
+        ),
         format!(
             "Air TX {} s RX {} s",
             s.tx_airtime_ms / 1000,

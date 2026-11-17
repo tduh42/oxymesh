@@ -21,4 +21,4 @@ expression: "text(&mut app, grid, &c)"
 |                                 |
 |                                 |
 |                                 |
-|A►next hold►open           B◄back|
+|A►next                     B◄back|

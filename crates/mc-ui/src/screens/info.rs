@@ -17,37 +17,31 @@ use crate::act::{Intent, Outcome};
 use crate::app::{Confirm, Input, Nav, Paint, Screen, Ui};
 use crate::chrome::{self, Footer};
 
-/// A settings page that could not open: its title and a note.
-#[derive(Debug)]
-pub struct Soon {
-    title: String,
-    note: String,
-}
-
-impl Soon {
-    pub fn new(title: &str, note: &str) -> Self {
-        Self {
-            title: String::from(title),
-            note: String::from(note),
-        }
+/// The device's health for About (ADR-0013): why it last started, always; what went wrong since
+/// the power came on, only when something did.
+fn health_lines(h: &crate::app::Health<'_>) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if !h.restart.is_empty() {
+        out.push(("Started", String::from(h.restart)));
     }
-}
-
-impl Screen for Soon {
-    fn title(&self, _ui: &Ui<'_>) -> String {
-        self.title.clone()
+    if h.panics > 0 {
+        let at = match h.panic_at {
+            // The file's name is enough on this width.
+            Some((file, line)) => format!(" {}:{line}", file.rsplit('/').next().unwrap_or(file)),
+            None => String::new(),
+        };
+        out.push(("Errors", format!("{}{at}", h.panics)));
     }
-
-    fn draw(&mut self, f: &mut Frame<'_>, body: Rect, _ui: &Ui<'_>) {
-        f.render_widget(
-            Paragraph::new(self.note.as_str()).wrap(Wrap { trim: true }),
-            rows(body, 1, body.height.saturating_sub(1)),
-        );
+    let times = |n: u32, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+    if h.radio_down {
+        out.push(("Radio", String::from("not answering")));
+    } else if h.radio_recoveries > 0 {
+        out.push(("Radio", times(h.radio_recoveries, "reset")));
     }
-
-    fn footer(&self, _ui: &Ui<'_>) -> Footer {
-        Footer::BACK
+    if h.store_errors > 0 {
+        out.push(("Storage", times(h.store_errors, "write error")));
     }
+    out
 }
 
 /// System → About.
@@ -80,13 +74,16 @@ impl Screen for About {
             Some(pc) => format!("{volts} {pc}%"),
             None => volts,
         };
-        let pairs: Vec<(&str, String)> = alloc::vec![
+        let mut pairs: Vec<(&str, String)> = alloc::vec![
             ("Name", name_of(&p.name)),
             ("Key", short_key(dev.node.id.pub_key())),
             ("Firmware", String::from(dev.info.version)),
+        ];
+        pairs.extend(health_lines(&c.health));
+        pairs.extend([
             (
                 "Frequency",
-                format!("{}.{:03} MHz", r.freq_khz / 1000, r.freq_khz % 1000)
+                format!("{}.{:03} MHz", r.freq_khz / 1000, r.freq_khz % 1000),
             ),
             (
                 "Modulation",
@@ -96,7 +93,7 @@ impl Screen for About {
                     r.bw_hz / 1000,
                     r.bw_hz % 1000 / 100,
                     r.cr
-                )
+                ),
             ),
             ("Power", format!("{} dBm", r.tx_power_dbm)),
             (
@@ -105,16 +102,16 @@ impl Screen for About {
                     "{}/{}",
                     dev.node.contacts.list.len(),
                     mc_node::contacts::MAX_CONTACTS
-                )
+                ),
             ),
             (
                 "Channels",
-                format!("{channels}/{}", mc_node::contacts::MAX_CHANNELS)
+                format!("{channels}/{}", mc_node::contacts::MAX_CHANNELS),
             ),
             ("Battery", battery),
             ("Uptime", format!("{} h {:02} min", up / 3600, up / 60 % 60)),
             ("For the app", format!("{} queued", dev.queued_messages())),
-        ];
+        ]);
         let lines: Vec<Line<'_>> = pairs
             .iter()
             .map(|(k, v)| Line::from(chrome::spread(k, v, w)))

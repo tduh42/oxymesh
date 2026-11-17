@@ -2,10 +2,14 @@
 //! air after listen before talk, the latched IRQ flags expired like the C++
 //! (`mc_core::rx_watch`), the noise floor, and the optional AGC reset (`docs/spec/air.md` §4.5).
 //! The board's radio front end (amplifier, LNA) follows through [`FrontEnd`].
+//!
+//! The chip is supervised (`mc_core::radio_health`, ADR-0013): commands that keep failing, or a
+//! chip found outside receive mode, end in a hardware reset and a fresh setup.
 
 use embassy_time::{Duration, Instant};
 use log::error;
 use mc_core::noise::NoiseFloor;
+use mc_core::radio_health::{RadioHealth, Report};
 use mc_core::rx_watch::{self, RxWatch, Watch};
 use mc_node::{Device, Node, Prefs, Storage};
 use rand_core::Rng;
@@ -132,6 +136,9 @@ fn channel_busy(
     false
 }
 
+/// Chip mode "receiving" in the status byte (GetStatus, §13.5.1).
+const MODE_RX: u8 = 5;
+
 /// What the radio received since boot, before the node sees it (diagnostics).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RxCounts {
@@ -154,6 +161,7 @@ pub struct Radio<'d, F: FrontEnd> {
     cfg: LoRaConfig,
     watch: RxWatch,
     noise: NoiseFloor,
+    health: RadioHealth,
     next_noise_round: u64,
     transmitting: bool,
     tx_started: Instant,
@@ -165,8 +173,8 @@ pub struct Radio<'d, F: FrontEnd> {
 
 impl<'d, F: FrontEnd> Radio<'d, F> {
     /// Resets and configures the radio from the prefs, at `tx_dbm`
-    /// (`Device::radio_tx_dbm`), then listens. A failure is logged: the node runs on, without
-    /// a radio.
+    /// (`Device::radio_tx_dbm`), then listens. After a failure the node runs on without a
+    /// radio, and [`Radio::poll`] tries again later.
     pub fn new(sx: Sx126x<'d>, fe: F, chip: Chip, prefs: &Prefs, tx_dbm: i8) -> Self {
         let mut r = Self {
             sx,
@@ -177,6 +185,7 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
             cfg: lora_of(prefs),
             watch: RxWatch::new(),
             noise: NoiseFloor::new(),
+            health: RadioHealth::new(),
             next_noise_round: 0,
             transmitting: false,
             tx_started: Instant::now(),
@@ -188,6 +197,7 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
                 .and_then(|()| r.setup());
         if let Err(e) = init {
             error!("SX1262: {e:?}");
+            r.health.failed_at_boot(Instant::now().as_millis());
         }
         r.fe.apply(prefs);
         r.fe.rx();
@@ -230,6 +240,28 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         self.noise.floor()
     }
 
+    /// What the supervisor counted: recoveries, and whether the chip is out of use.
+    pub fn health(&self) -> Report {
+        self.health.report()
+    }
+
+    /// Hardware reset and a fresh setup, as at boot.
+    fn recover(&mut self, now_ms: u64) {
+        let r = self
+            .sx
+            .init(self.chip.tcxo_millivolts, self.chip.dcdc)
+            .and_then(|()| self.setup());
+        if let Err(e) = &r {
+            error!("SX1262 recovery: {e:?}");
+        }
+        self.health.recovered(now_ms, r.is_ok());
+        self.transmitting = false;
+        self.header_latched = false;
+        self.fe.rx();
+        self.watch.reset();
+        self.noise.reset();
+    }
+
     /// `tempradio`: other modulation settings on the chip, the node's untouched.
     pub fn retune(&mut self, cfg: LoRaConfig) {
         self.cfg = cfg;
@@ -256,7 +288,38 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         rng: &mut impl Rng,
     ) -> Option<Tx> {
         let mut event = None;
-        let flags = self.sx.irq_status().unwrap_or(0);
+        let ms = Instant::now().as_millis();
+        if self.health.recover_due(ms) {
+            let sending = self.transmitting;
+            if sending {
+                m.node().tx_done(now);
+            }
+            self.recover(ms);
+            m.noise_floor(self.noise.floor());
+            return sending.then_some(Tx::Done);
+        }
+        if self.health.down() {
+            return None;
+        }
+        let flags = match self.sx.irq_status() {
+            Ok(f) => {
+                self.health.command(true);
+                f
+            }
+            Err(_) => {
+                self.health.command(false);
+                0
+            }
+        };
+        // Every 10 s: is the chip still listening? Three times in a row outside receive mode
+        // raise the C++ flag, and the next pass resets the chip.
+        if self.health.check_due(ms) && !self.transmitting {
+            let mode = self.sx.status().ok().map(|s| (s >> 4) & 7);
+            self.health.command(mode.is_some());
+            if self.health.checked(ms, mode.map(|m| m == MODE_RX)) {
+                m.node().disp.stats.err_flags |= mc_node::dispatch::ERR_EVENT_STARTRX_TIMEOUT;
+            }
+        }
         let header = flags & irq::HEADER_ERR != 0;
         if header && !self.header_latched {
             self.rx_counts.header = self.rx_counts.header.wrapping_add(1);
@@ -321,7 +384,9 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
                 node.poll_tx(now, || channel_busy(sx, rx.receiving, lbt, floor, cfg), rng)
         {
             self.fe.tx();
-            if self.sx.transmit(self.cfg.preamble, &f.raw).is_ok() {
+            let sent = self.sx.transmit(self.cfg.preamble, &f.raw).is_ok();
+            self.health.command(sent);
+            if sent {
                 self.transmitting = true;
                 self.tx_started = Instant::now();
                 event = Some(Tx::Started);
@@ -331,19 +396,28 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         }
 
         // Noise floor, sampled like the C++ while listening: a round's samples in one burst,
-        // since the loop no longer turns every millisecond.
+        // since the loop no longer turns every millisecond. The burst stops at a failed read
+        // (a chip that stopped answering would hold the pass for 64 timeouts).
         let ms = Instant::now().as_millis();
         if ms >= self.next_noise_round {
             self.noise.trigger();
             self.next_noise_round = ms + mc_core::noise::ROUND_MS;
         }
         if !self.transmitting && !rx.receiving {
+            let mut failed = false;
             for _ in 0..mc_core::noise::SAMPLES {
-                if !self.noise.sampling() {
+                if failed || !self.noise.sampling() {
                     break;
                 }
                 let sx = &mut self.sx;
-                self.noise.step(true, false, || sx.rssi_inst().ok());
+                self.noise.step(true, false, || {
+                    let r = sx.rssi_inst().ok();
+                    failed = r.is_none();
+                    r
+                });
+            }
+            if failed {
+                self.health.command(false);
             }
         }
         // The pass after a round's last sample turns it into the floor.
@@ -355,6 +429,7 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
         if m.node().agc_due(now) && !self.transmitting && !rx.receiving && flags & irq::RX_DONE == 0
         {
             let r = self.sx.reset_agc().and_then(|()| self.setup());
+            self.health.command(r.is_ok());
             if let Err(e) = r {
                 error!("AGC reset: {e:?}");
             }
@@ -368,6 +443,10 @@ impl<'d, F: FrontEnd> Radio<'d, F> {
     /// transmission's give-up time, and soon while DIO1 is already high (a latched flag
     /// hides the next rising edge).
     pub fn next_deadline(&self) -> Instant {
+        if self.health.down() {
+            // Out of use: the next recovery attempt is looked at on the loop's own ceiling.
+            return Instant::now() + Duration::from_secs(1);
+        }
         let mut t = Instant::from_millis(self.next_noise_round);
         if self.transmitting {
             t = t.min(self.tx_started + Duration::from_secs(10));

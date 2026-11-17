@@ -296,6 +296,9 @@ Hex output is uppercase, as `Utils::toHex` writes it.
 - There are no bridges and no ADC multiplier.
 - After `region load`, the default scope used for adverts follows the new table at once. The C++ keeps the key it had computed until `region default` or a restart.
 - `stats-packets` "recv" and "sent" are the node's counters (§2.11).
+- `get pwrmgt.bootreason` gives the real reason of the last start as `Reset:` (power on, restart, woke up, after an error, watchdog, low voltage, USB reset; ADR-0013). The C++ answers "Not available" on ESP32.
+- `reboot` and `poweroff` first write an access-list change still waiting for its lazy save (5 s). The C++ restarts at once and loses it.
+- The server restarts by itself after a panic or a main loop stuck for 30 s (ADR-0013).
 
 ### 4.7 Power saving (`powersaving on`)
 
@@ -341,8 +344,6 @@ A SPIFFS holding `/s_contacts` or `/regions2` is a server's (`is_server`). The i
 
 `discovery_mod_timestamp` is not in the C++'s `/prefs.json`, so it restarts at 0. `mc spiffs <image>` shows what an import would bring. The test image is `testdata/spiffs/cpp-repeater.bin`, made up by `testdata/spiffs/gen.py`.
 
-To be written with milestone S2.
-
 ## 6. Firmware (`rpt-*`, `room-*`)
 
 `firmware/esp32s3/src/bin/server/{m5,heltec_v4}.rs`, one per board, take the role: `rpt-*` binaries run a repeater, `room-*` binaries a room server. They sit on the shared runner (ADR-0009). The radio loop takes a `run::radio::Mesh`: a companion `Device`, or here a bare `Node`. Flash with `scripts/flash.sh m5-repeater|heltec-v4-repeater|m5-room|heltec-v4-room <port>`.
@@ -369,7 +370,7 @@ To be written with milestone S2.
 | Name at first start (`ADVERT_NAME`) | `Thinknode M5 Repeater`, `Thinknode M5 Room Server` | `Heltec Repeater`, `Heltec Room` |
 | Neighbours (`MAX_NEIGHBOURS`) | 8 | 50 |
 | GPS | yes: `gps` commands, position, clock | no |
-| Clock chip | PCF8563, read at boot, written when the clock is set | none: the clock starts at 2026-11-05 until `time` or `clock sync` |
+| Clock chip | PCF8563, read at boot, written when the clock is set | none: the clock starts at the firmware's build time (`run::BOOT_EPOCH`) and the pages show `--:--` until `time` or `clock sync` |
 | Front end | none | GC1109 or KCT8103L (`radio.fem.rxgain`, regulatory gain) |
 | Screen | e-paper, §13 of `ui.md` | OLED, §13 of `ui.md` |
 

@@ -15,9 +15,11 @@ name = "mc-m5"
 path = "./src/bin/mc-m5.rs"
 
 # U0 spike (docs/decisions/0008): Ratatui + mousefood on the e-paper, heap and timing measurements.
+# Built only with `--features spikes`.
 [[bin]]
 name = "ui-spike"
 path = "./src/bin/ui-spike.rs"
+required-features = ["spikes"]
 
 [[bin]]
 name = "mc-heltec-v4"
@@ -39,9 +41,11 @@ path = "./src/bin/room-m5.rs"
 name = "room-heltec-v4"
 path = "./src/bin/room-heltec-v4.rs"
 
+# G2 probe: which GPS receiver the board carries. Built only with `--features spikes`.
 [[bin]]
 name = "gps-probe"
 path = "./src/bin/gps-probe.rs"
+required-features = ["spikes"]
 
 [dependencies]
 esp-hal = { version = "~1.2.2", features = ["esp32s3", "log-04", "unstable"] }
@@ -56,7 +60,8 @@ esp-bootloader-esp-idf = { version = "0.6.0", features = ["embedded-storage", "e
 log = "0.4.27"
 embassy-executor = { version = "0.10.0", features = ["log"] }
 embassy-time = { version = "0.5.0", features = ["log"] }
-esp-backtrace = { version = "0.20.0", features = ["esp32s3", "panic-handler", "println"] }
+# The panic handler is ours (`run::crash`, ADR-0013); this crate walks the stack for `debug-log`.
+esp-backtrace = { version = "0.20.0", features = ["esp32s3", "println"] }
 esp-println = { version = "0.18.0", features = ["esp32s3", "log-04"] }
 critical-section = "1.2.0"
 static_cell = "2.1.1"
@@ -85,6 +90,8 @@ embassy-futures = "0.1"
 [features]
 # Log on UART0: interferes with the companion protocol, for debugging only.
 debug-log = ["trouble-host/log"]
+# The one-off measurement binaries (`ui-spike`, `gps-probe`).
+spikes = []
 
 [patch.crates-io]
 # trouble-host 0.7.0 with `set_passkey` backported from 0.8.0: MeshCore's fixed PIN (ADR-0007).

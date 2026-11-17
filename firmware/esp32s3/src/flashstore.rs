@@ -130,6 +130,10 @@ fn blob_key(key: &[u8; 32]) -> u32 {
     BLOB_BASE | (u32::from_le_bytes([key[0], key[1], key[2], key[3]]) >> 1)
 }
 
+/// The storage could not be read (as opposed to holding nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreadable;
+
 pub struct FlashStore<S: NorFlash> {
     map: MapStorage<u32, S, Cache<Uncached, Uncached, Uncached, u32>>,
     buf: [u8; BUF],
@@ -175,13 +179,13 @@ impl<S: NorFlash> FlashStore<S> {
 
     /// Stored identity: expanded private key (64) then public key (32). `Err` when the storage
     /// cannot be read, which must not be taken for a first boot (that would replace the key).
-    pub fn identity(&mut self) -> Result<Option<[u8; 64]>, ()> {
+    pub fn identity(&mut self) -> Result<Option<[u8; 64]>, Unreadable> {
         let mut b = [0u8; 96];
         let v: Option<&[u8]> =
-            block_on(self.map.fetch_item(&mut self.buf, &KEY_IDENTITY)).map_err(|_| ())?;
+            block_on(self.map.fetch_item(&mut self.buf, &KEY_IDENTITY)).map_err(|_| Unreadable)?;
         let Some(v) = v else { return Ok(None) };
         if v.len() != 96 {
-            return Err(());
+            return Err(Unreadable);
         }
         b.copy_from_slice(v);
         let mut prv = [0u8; 64];
@@ -189,76 +193,118 @@ impl<S: NorFlash> FlashStore<S> {
         Ok(Some(prv))
     }
 
-    /// Reloads prefs, contacts (in index order), channels, then in one pass over the storage
-    /// the screen's history and the offline queue.
+    /// Reloads prefs, contacts (in index order), channels, the screen's history and the offline
+    /// queue, in one pass over the storage. Items come out oldest first, so the last version
+    /// of a key wins, and a tombstone (an empty value) deletes: what `get` would return for
+    /// each key, without walking the partition once per key (each walk took about 0.1-0.25 s;
+    /// 130 contacts made a boot of 18 s, measured on the M5 on 2026-11-17).
     pub fn load(&mut self, dev: &mut Device) {
-        let node = &mut dev.node;
-        let mut b = [0u8; PREFS_RECORD];
-        if let Some(n) = self.get(KEY_PREFS, &mut b)
-            && n >= PREFS_RECORD_V1
-            && let Some(p) = decode_prefs(&b[..n], &node.prefs)
-        {
-            node.prefs = p;
-        }
-        let mut cnt = [0u8; 2];
-        let count = match self.get(KEY_COUNT, &mut cnt) {
-            Some(2) => usize::from(u16::from_le_bytes(cnt)).min(mc_node::contacts::MAX_CONTACTS),
-            _ => 0,
-        };
-        let mut rec = [0u8; CONTACT_RECORD];
-        for i in 0..count {
-            if self.get(CONTACT_BASE + i as u32, &mut rec) == Some(CONTACT_RECORD)
-                && let Some(c) = decode_contact(&rec)
-                && node.contacts.list.push(c).is_ok()
-            {
-                if let Some(s) = self.saved.get_mut(node.contacts.list.len() - 1) {
-                    *s = crc32(&rec);
-                }
-            }
-        }
-        self.saved_count = node.contacts.list.len();
-        let mut ch = [0u8; CHANNEL_RECORD];
-        for i in 0..mc_node::contacts::MAX_CHANNELS {
-            if self.get(CHANNEL_BASE + i as u32, &mut ch) == Some(CHANNEL_RECORD)
-                && let Some(c) = decode_channel(&ch)
-                && let Some(slot) = node.channels.0.get_mut(i)
-            {
-                *slot = c;
-            }
-        }
-        self.scan(dev);
-    }
-
-    /// History and queue: items come out oldest first, so a later version or a tombstone
-    /// overrides what came before.
-    fn scan(&mut self, dev: &mut Device) {
+        use mc_node::contacts::{Channel, MAX_CHANNELS, MAX_CONTACTS};
+        let mut prefs: Option<([u8; PREFS_RECORD], usize)> = None;
+        let mut count = 0usize;
+        // Contacts by their index in storage: the latest record of each, valid or not.
+        let mut present = [false; MAX_CONTACTS];
+        let mut crcs = [0u32; MAX_CONTACTS];
+        dev.node.contacts.list.clear();
         let mut buf = [0u8; BUF];
         let Ok(mut it) = block_on(self.map.fetch_all_items(&mut buf)) else {
             self.errors += 1;
             return;
         };
         loop {
-            match block_on(it.next::<&[u8]>(&mut buf)) {
-                Ok(Some((key, value))) => {
-                    if (HISTORY_BASE..HISTORY_BASE + 0x1_0000).contains(&key) {
-                        if value.len() == HISTORY_RECORD {
-                            dev.restore_history(value);
-                        }
-                    } else if key & !QUEUE_MASK == QUEUE_BASE {
-                        if value.is_empty() {
-                            dev.forget_queued(key & QUEUE_MASK);
-                        } else {
-                            dev.restore_queued(key & QUEUE_MASK, value);
-                        }
-                    }
-                }
+            let (key, value) = match block_on(it.next::<&[u8]>(&mut buf)) {
+                Ok(Some(kv)) => kv,
                 Ok(None) => break,
                 Err(_) => {
                     self.errors += 1;
                     break;
                 }
+            };
+            match key {
+                KEY_PREFS => {
+                    // Longer than a record: unreadable, as `get` would find it.
+                    let mut b = [0u8; PREFS_RECORD];
+                    prefs = match b.get_mut(..value.len()) {
+                        Some(d) => {
+                            d.copy_from_slice(value);
+                            Some((b, value.len()))
+                        }
+                        None => None,
+                    };
+                }
+                KEY_COUNT => {
+                    count = match value {
+                        [lo, hi] => usize::from(u16::from_le_bytes([*lo, *hi])).min(MAX_CONTACTS),
+                        _ => 0,
+                    };
+                }
+                k if (CONTACT_BASE..CONTACT_BASE + MAX_CONTACTS as u32).contains(&k) => {
+                    let i = (k - CONTACT_BASE) as usize;
+                    let c = (value.len() == CONTACT_RECORD)
+                        .then(|| decode_contact(value))
+                        .flatten();
+                    let list = &mut dev.node.contacts.list;
+                    match c {
+                        Some(c) => {
+                            // Placeholders up to `i`, replaced or dropped below.
+                            while list.len() <= i {
+                                if list.push(c.clone()).is_err() {
+                                    break;
+                                }
+                            }
+                            if let Some(slot) = list.get_mut(i) {
+                                *slot = c;
+                            }
+                            present[i] = true;
+                            crcs[i] = crc32(value);
+                        }
+                        None => present[i] = false,
+                    }
+                }
+                k if (CHANNEL_BASE..CHANNEL_BASE + MAX_CHANNELS as u32).contains(&k) => {
+                    let i = (k - CHANNEL_BASE) as usize;
+                    let c = (value.len() == CHANNEL_RECORD)
+                        .then(|| decode_channel(value))
+                        .flatten();
+                    if let Some(slot) = dev.node.channels.0.get_mut(i) {
+                        *slot = c.unwrap_or(Channel::EMPTY);
+                    }
+                }
+                k if (HISTORY_BASE..HISTORY_BASE + 0x1_0000).contains(&k) => {
+                    if value.len() == HISTORY_RECORD {
+                        dev.restore_history(value);
+                    }
+                }
+                k if k & !QUEUE_MASK == QUEUE_BASE => {
+                    if value.is_empty() {
+                        dev.forget_queued(k & QUEUE_MASK);
+                    } else {
+                        dev.restore_queued(k & QUEUE_MASK, value);
+                    }
+                }
+                _ => {}
             }
         }
+        if let Some((b, n)) = prefs
+            && n >= PREFS_RECORD_V1
+            && let Some(p) = decode_prefs(&b[..n], &dev.node.prefs)
+        {
+            dev.node.prefs = p;
+        }
+        // Contacts below the stored count with a valid record, in index order; the CRC of what
+        // is stored follows each to its place in the list.
+        let mut kept = 0;
+        let mut index = 0;
+        dev.node.contacts.list.retain(|_| {
+            let keep = index < count && present[index];
+            if keep {
+                self.saved[kept] = crcs[index];
+                kept += 1;
+            }
+            index += 1;
+            keep
+        });
+        self.saved_count = kept;
     }
 
     /// Stored bonds, most recent first. An unreadable list is forgotten.

@@ -20,8 +20,10 @@ The goal is a Rust firmware for the ThinkNode M5 that replaces the MeshCore firm
   6. a message sent from the device's screen is retried by the firmware if it is not acknowledged (no app is there to do it); a message sent by the app keeps the C++ rule (no retry by the firmware).
 - Any new deviation goes through an ADR that amends this one.
 
+**Amended 2026-11-17.** The one list of deviations, with their reasons, is now `docs/spec/companion.md` §9, which this ADR no longer repeats. Since the list above: item 5 was withdrawn in MC5 (the PIN is drawn at boot, as in the C++, once the Bluetooth host took a fixed passkey); items 7 to 12 were added there with the milestone that needed each, without an ADR of their own. From now on a deviation is added to §9 with its reason and the C++ lines it departs from, in the same commit as the code.
+
 ## Consequences
 
 - We inherit MeshCore's cryptographic weaknesses (AES-128-ECB, 2-byte MAC, static keys): that is the price of compatibility. Strong encryption remains the app's job (ln-msg in loranet).
-- `mc conform` compares our responses with those of the Heltec running C++: any difference outside the list above is a bug.
+- Our responses are compared with those of the Heltec running C++ by `mc airtest` and `mc duo` (over the air), and by the meshcore.js vectors (`testdata/proto`): any difference outside the list is a bug. (A command-by-command `mc conform` was planned and never built.)
 - Rejected: an "enhanced" mode negotiated between Rust nodes. It would fragment the network for a gain nobody asked for.

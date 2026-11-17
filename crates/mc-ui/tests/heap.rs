@@ -65,6 +65,9 @@ fn ctx(w: &mc_sim::World) -> Ctx<'_> {
         charging: false,
         light: false,
         ble: mc_ui::Ble::default(),
+        health: mc_ui::Health::default(),
+        gps_searching: None,
+        rx: None,
         gps: None,
     }
 }

@@ -6,6 +6,7 @@ mod describe;
 mod duo;
 mod png;
 mod port;
+mod stop;
 mod ui;
 
 use clap::{Parser, Subcommand};
@@ -131,7 +132,7 @@ enum Cmd {
     Heard { port: String },
     /// The device's telemetry permissions byte (SELF_INFO), or set it (SET_OTHER_PARAMS, the
     /// other fields kept): bits 0-1 base, 2-3 location, 4-5 environment; 0 nobody, 1
-    /// favourites, 2 everyone.
+    /// favourites, 2 everyone. The value is decimal, or hex with `0x`.
     Telemetry { port: String, value: Option<String> },
     /// The device's transmit power (SELF_INFO), or set it in dBm (SET_RADIO_TX_POWER).
     TxPower {
@@ -173,7 +174,6 @@ enum Cmd {
         #[arg(long, default_value = "m5")]
         board: String,
     },
-    /// Two companions talk to each other (adverts, DMs, channel, pings), zero-hop unless `--flood`.
     /// A long soak between A (device under test) and B that never reads a message queue:
     /// adverts both ways, a DM from B to A (acknowledged), a ping each way; A's restarts counted.
     Soak {
@@ -195,6 +195,7 @@ enum Cmd {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Two companions talk to each other (adverts, DMs, channel, pings), zero-hop unless `--flood`.
     Duo {
         #[arg(long)]
         a: String,
@@ -395,11 +396,11 @@ fn latency(path: &str, count: u32) -> Result<(), String> {
     }
     let slow = ms.iter().filter(|&&m| m > 100).count();
     ms.sort_unstable();
+    let (Some(min), Some(median), Some(max)) = (ms.first(), ms.get(ms.len() / 2), ms.last()) else {
+        return Err("--count 0: nothing to measure".into());
+    };
     println!(
-        "{count} round trips: min {} ms, median {} ms, max {} ms; {slow} over 100 ms",
-        ms[0],
-        ms[ms.len() / 2],
-        ms[ms.len() - 1]
+        "{count} round trips: min {min} ms, median {median} ms, max {max} ms; {slow} over 100 ms"
     );
     Ok(())
 }
@@ -441,10 +442,13 @@ fn advert(path: &str, flood: bool) -> Result<(), String> {
     let mut p = Port::open(path, "device")?;
     p.verbose = true;
     p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
-    p.ask(&Command::SetDeviceTime {
+    // The device refuses a time before its own: the advert still goes out.
+    if let Err(e) = p.ask_ok(&Command::SetDeviceTime {
         unix_s: crate::port::now_unix(),
-    })?;
-    p.ask(&Command::SendSelfAdvert { flood: Some(flood) })?;
+    }) {
+        println!("clock not changed: {e}");
+    }
+    p.ask_ok(&Command::SendSelfAdvert { flood: Some(flood) })?;
     Ok(())
 }
 
@@ -460,9 +464,8 @@ fn telemetry(path: &str, value: Option<&str>) -> Result<(), String> {
         return Err("no SELF_INFO".into());
     };
     if let Some(v) = value {
-        let v = v.trim_start_matches("0x");
-        let t = u8::from_str_radix(v, 16).map_err(|e| format!("telemetry: {e}"))?;
-        p.ask(&Command::SetOtherParams {
+        let t = byte(v).map_err(|e| format!("telemetry: {e}"))?;
+        p.ask_ok(&Command::SetOtherParams {
             manual_add: si.manual_add,
             telemetry: Some(t),
             advert_loc_policy: Some(si.advert_loc_policy),
@@ -481,7 +484,7 @@ fn tx_power(path: &str, dbm: Option<i8>) -> Result<(), String> {
     p.verbose = true;
     p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
     if let Some(d) = dbm {
-        p.ask(&Command::SetRadioTxPower { dbm: d })?;
+        p.ask_ok(&Command::SetRadioTxPower { dbm: d })?;
     }
     p.ask(&Command::AppStart {
         reserved: [0; 7],
@@ -535,9 +538,10 @@ fn set_time(path: &str) -> Result<(), String> {
     let mut p = Port::open(path, "device")?;
     p.verbose = true;
     p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
-    p.ask(&Command::SetDeviceTime {
+    p.ask_ok(&Command::SetDeviceTime {
         unix_s: crate::port::now_unix(),
-    })?;
+    })
+    .map_err(|e| format!("{e} (a device refuses a time before its own clock's)"))?;
     Ok(())
 }
 
@@ -546,7 +550,7 @@ fn var(path: &str, set: Option<&str>) -> Result<(), String> {
     p.verbose = true;
     p.ask(&Command::DeviceQuery { app_ver: APP_VER })?;
     match set {
-        Some(v) => p.ask(&Command::SetCustomVar { var: v.as_bytes() })?,
+        Some(v) => p.ask_ok(&Command::SetCustomVar { var: v.as_bytes() })?,
         None => p.ask(&Command::GetCustomVars)?,
     };
     Ok(())
@@ -818,11 +822,21 @@ fn inject(path: &str, hex: &str, prio: u8) -> Result<(), String> {
     mc_air::Packet::decode(&raw[..n]).map_err(|e| format!("invalid frame: {e:?}"))?;
     let mut p = Port::open(path, "device")?;
     p.verbose = true;
-    p.ask(&Command::SendRawPacket {
+    p.ask_ok(&Command::SendRawPacket {
         priority: prio,
         raw: &raw[..n],
     })?;
     Ok(())
+}
+
+/// A byte from the command line: decimal, or hex with `0x`.
+fn byte(s: &str) -> Result<u8, String> {
+    let s = s.trim();
+    let r = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(h) => u8::from_str_radix(h, 16),
+        None => s.parse(),
+    };
+    r.map_err(|e| format!("{s}: {e}"))
 }
 
 fn spiffs(path: &std::path::Path) -> Result<(), String> {
@@ -866,5 +880,21 @@ fn spiffs(path: &std::path::Path) -> Result<(), String> {
             Ok(())
         }
         Err(e) => Err(format!("nothing to import: {e:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::byte;
+
+    #[test]
+    fn a_byte_is_decimal_or_hex_with_0x() {
+        assert_eq!(byte("2"), Ok(2));
+        assert_eq!(byte("10"), Ok(10));
+        assert_eq!(byte("0x10"), Ok(16));
+        assert_eq!(byte(" 0X2a "), Ok(42));
+        assert!(byte("256").is_err());
+        assert!(byte("2a").is_err(), "hex needs its 0x");
+        assert!(byte("").is_err());
     }
 }

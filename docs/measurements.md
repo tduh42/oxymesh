@@ -2,6 +2,15 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-17 — restarts (ADR-0013), boot time, port opening
+
+- Setup: the M5 on USB (`/dev/cu.wchusbserial210`), `debug-log` builds read with `mc log` (which does not reset it); 130 contacts stored.
+- **Panic**: `FEATURES=debug-log OXYMESH_CRASH_TEST=panic scripts/flash.sh m5`. At 20 s: `!! panicked at src/bin/mc-m5.rs:774:17`, then the return addresses; the chip restarted by itself (reset reason 0x03, software), and ran on: `health: started after an error; panics Some((1, "src/bin/mc-m5.rs", 774))`, no second panic.
+- **Hang**: the same with `=hang`. At 20 s `test: the loop stops here`; about 30 s later the chip restarted (reason 0x10, RTC watchdog) and ran on: `health: started watchdog`.
+- **Boot time**: the first pass of the main loop came 18.8 s after power-on. Timed step by step: Bluetooth 32 ms, GPS probe done at 607 ms, identity 243 ms, **loading the store 17,826 ms**, bonds 99 ms. Each single-key read walks the whole 768 KB partition (0.1-0.25 s), and the load read every contact and channel by key. One pass over the storage instead: **270 ms**, the loop at 1.3 s, the same 130 contacts. With the watchdog (30 s, fed by the loop), about 300 contacts would have made the device restart before ever reaching its loop; the watchdog now waits during boot's storage steps.
+- **Opening the port does not reset the M5** (any more): `mc stats` three times, `mc info` and `mc tx-power` left the uptime running (`debug-log` status line, then the release build's clock: 42, 44, 47 s over 6 s of wall time). The resets seen on 2026-11-14 are not explained; the 25 s without answers right after a flash were the slow boot above.
+- The clock chip had lost power again (VL set, a time in 2000): the screens now say "Clock not set" until it is set.
+
 ## 2026-11-15 — reliability soak (R4): 100 rounds against the C++ Heltec
 
 - Setup: `mc-m5` release build (the event-driven loop, P1) on the M5 over USB, the C++ Heltec V4 (2ABEBB3D) beside it, a phone connected to the M5 over Bluetooth part of the time. `mc soak --a <M5> --b <Heltec> --runs 100`: both ports kept open, and nothing reads a message queue (the Heltec's holds real messages, the M5's is the phone's): zero-hop adverts both ways (heard), a DM Heltec → M5 (delivery acknowledged; the 100 test DMs stayed queued for the phone), a telemetry ping each way, the M5's uptime every round.

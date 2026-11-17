@@ -2,6 +2,8 @@
 # Builds and flashes oxymesh with the board's partition table.
 # Usage: scripts/flash.sh <board> <port>, board: m5, heltec-v4 (companions), m5-repeater,
 # heltec-v4-repeater, m5-room, heltec-v4-room (servers)
+# FEATURES=debug-log builds with those cargo features (debug-log: logs on the serial port, which
+# the companion protocol then cannot use).
 set -euo pipefail
 cd "$(dirname "$0")/../firmware/esp32s3"
 board="${1:?board: m5, heltec-v4, m5-repeater, heltec-v4-repeater, m5-room or heltec-v4-room}"
@@ -16,6 +18,6 @@ case "$board" in
   *) echo "unknown board: $board" >&2; exit 1 ;;
 esac
 [ -f "$HOME/export-esp.sh" ] && . "$HOME/export-esp.sh"
-cargo build --release --bin "$bin"
+cargo build --release --bin "$bin" ${FEATURES:+--features "$FEATURES"}
 espflash flash --chip esp32s3 --port "$port" --flash-size "$size" --partition-table "$table" \
   "target/xtensa-esp32s3-none-elf/release/$bin"

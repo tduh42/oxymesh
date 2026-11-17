@@ -87,7 +87,7 @@ impl Home {
             None => String::new(),
         };
         alloc::vec![
-            clock::date(clock::local(c.unix, c.tz_offset_min)),
+            clock::date(c.time()),
             unread,
             last,
             heard,
@@ -117,7 +117,7 @@ impl Screen for Home {
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let ch = Self::clock_rows(ui);
         // Text clock: what the terminal shows; on the panel, the overlay covers it.
-        let time = clock::hhmm(clock::local(ui.ctx.unix, ui.ctx.tz_offset_min));
+        let time = clock::hhmm(ui.ctx.time());
         f.render_widget(
             Paragraph::new(time)
                 .alignment(Alignment::Center)
@@ -193,7 +193,7 @@ impl Screen for Home {
         let c = ui.ctx;
         let dev = c.dev;
         let wi = w as i16;
-        let t = clock::local(c.unix, c.tz_offset_min);
+        let t = c.time();
         let mut sc = Scene::new();
         sc.text(4, 34, Font::Digits, Align::Left, true, &clock::hhmm(t));
         let dx = 92;
@@ -201,10 +201,12 @@ impl Screen for Home {
         let dm = scene::ellipsize(Font::R12, &clock::day_month(t), wi - dx - 2);
         sc.text(dx, 32, Font::R12, Align::Left, true, &dm);
         // GPS and noise floor.
-        let gps = match c.gps {
-            Some(g) => format!("GPS fix, {} sats", g.satellites),
-            None if dev.gps_active() => String::from("GPS, no fix"),
-            None => String::from("GPS off"),
+        let gps = match (c.gps, c.gps_searching) {
+            (Some(g), _) => format!("GPS fix, {} sats", g.satellites),
+            _ if !dev.gps_active() => String::from("GPS off"),
+            // Searching: the count tells an open sky from a room.
+            (None, Some(n)) => format!("No fix, {n} sats"),
+            (None, None) => String::from("GPS, no fix"),
         };
         sc.icon(4, 40, Icon::Pin, IconSize::S8, true);
         sc.text(15, 47, Font::R8, Align::Left, true, &gps);
@@ -215,7 +217,7 @@ impl Screen for Home {
             Font::R8,
             Align::Left,
             true,
-            &format!("{} dBm", dev.noise_floor),
+            &super::noise_text(dev.noise_floor),
         );
         // The last message received.
         let (cy, ch) = (52i16, 43u16);
@@ -261,13 +263,13 @@ impl Screen for Home {
         }
         // The launcher: 3 × 2 tiles.
         let sel = self.state.selected().unwrap_or(0) % LAUNCHER.len();
-        let tw = (w - 8 - 4) / 3;
+        let (tw, tile_x) = super::pixel::tile_columns(w, 3);
         let th = 33u16;
         let new = dev.unread_alerting();
         for (i, (label, d, icon)) in LAUNCHER.iter().enumerate() {
             let (col, row) = (i as i16 % 3, i as i16 / 3);
-            let x = 4 + col * (tw as i16 + 2);
-            let y = cy + ch as i16 + 4 + row * (th as i16 + 2);
+            let x = tile_x(col);
+            let y = cy + ch as i16 + 4 + row * (th as i16 + super::pixel::TILE_GAP);
             let count = if *d == Dest::Messages { new } else { 0 };
             super::pixel::tile(&mut sc, x, y, tw, th, *icon, label, count, i == sel);
         }
@@ -275,7 +277,7 @@ impl Screen for Home {
     }
 
     fn paints(&self, body: Rect, ui: &Ui<'_>) -> Vec<(Rect, Paint)> {
-        let t = clock::local(ui.ctx.unix, ui.ctx.tz_offset_min).map(|t| (t.hour, t.minute));
+        let t = ui.ctx.time().map(|t| (t.hour, t.minute));
         alloc::vec![(rows(body, 0, Self::clock_rows(ui)), Paint::Clock(t))]
     }
 }

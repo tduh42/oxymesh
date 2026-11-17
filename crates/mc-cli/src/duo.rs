@@ -651,10 +651,20 @@ fn checks(
     Ok(())
 }
 
-/// Puts contacts and the channel slot back as they were.
+/// Puts contacts, the channel slot and the telemetry permissions back as they were, whatever
+/// ended the run (a failed check, an error, Ctrl-C).
 fn restore(a: &mut Peer, b: &mut Peer) {
+    // Ctrl-C got us here: the commands below must be allowed to run.
+    crate::stop::clear();
     let (ak, bk) = (a.key, b.key);
     for (p, other) in [(&mut *a, bk), (&mut *b, ak)] {
+        let before = p.other.1;
+        if let Err(e) = open_telemetry(p, Some(before)) {
+            println!(
+                "  {}: could not restore the telemetry permissions ({before:#04x}): {e}",
+                p.label
+            );
+        }
         let r = match &p.before {
             Some(c) => put_contact(&mut p.port, &other, c, c.path_len),
             None => p
@@ -683,6 +693,8 @@ pub fn run(
     reboot: bool,
     verbose: bool,
 ) -> Result<(), String> {
+    // Ctrl-C ends the checks and still puts the devices' settings back.
+    crate::stop::install();
     let mut a = open(a_path, "A", verbose)?;
     let mut b = open(b_path, "B", verbose)?;
     if a.key == b.key {
@@ -915,6 +927,8 @@ pub fn soak(
     pace: Pace,
     verbose: bool,
 ) -> Result<(), String> {
+    // Ctrl-C ends the run after the check in hand and still puts the settings back.
+    crate::stop::install();
     let mut a = open(a_path, "A", verbose)?;
     let mut b = open(b_path, "B", verbose)?;
     if a.key == b.key {
@@ -927,18 +941,26 @@ pub fn soak(
     let _ = b.port.drain();
     a.before = get_contact(&mut a.port, &b.key)?;
     b.before = get_contact(&mut b.port, &a.key)?;
+    // Nothing changed on the devices so far; from here on, whatever ends the rounds (a setup
+    // step that fails, Ctrl-C), contacts, routes and telemetry permissions go back as found.
+    let res = soak_rounds(&mut a, &mut b, runs, pace);
+    restore(&mut a, &mut b);
+    res
+}
+
+fn soak_rounds(a: &mut Peer, b: &mut Peer, runs: u32, pace: Pace) -> Result<(), String> {
     // Each side learns the other, on a zero-hop route; both answer pings.
-    advert(&mut a, &mut b)?;
-    advert(&mut b, &mut a)?;
+    advert(a, b)?;
+    advert(b, a)?;
     let (ak, bk) = (a.key, b.key);
-    for (p, other) in [(&mut a, bk), (&mut b, ak)] {
+    for (p, other) in [(&mut *a, bk), (&mut *b, ak)] {
         let c = get_contact(&mut p.port, &other)?
             .ok_or_else(|| format!("{}: the other device is not a contact", p.label))?;
         put_contact(&mut p.port, &other, &c, 0)?;
     }
-    open_telemetry(&mut a, None)?;
-    open_telemetry(&mut b, None)?;
-    std::thread::sleep(Duration::from_secs(3));
+    open_telemetry(a, None)?;
+    open_telemetry(b, None)?;
+    crate::stop::sleep(3);
     let names = [
         "A advert heard by B",
         "B advert heard by A",
@@ -951,33 +973,41 @@ pub fn soak(
     let mut restarts = Vec::new();
     let mut last_up = uptime(&mut a.port).unwrap_or(0);
     let t_start = Instant::now();
+    let mut done = 0;
     for run in 1..=runs {
+        if crate::stop::requested() {
+            println!("interrupted after {done} of {runs} runs");
+            break;
+        }
+        done = run;
         let mut line = Vec::new();
         let due = |every: u32| every > 0 && (run - 1) % every == 0;
         let skip = || Err(String::from("skipped"));
         let adverts = due(pace.advert_every);
         let results: [Result<Option<u128>, String>; 5] = [
             if adverts {
-                advert_heard(&mut a, &mut b).map(|()| None)
+                advert_heard(a, b).map(|()| None)
             } else {
                 skip()
             },
             if adverts {
-                advert_heard(&mut b, &mut a).map(|()| None)
+                advert_heard(b, a).map(|()| None)
             } else {
                 skip()
             },
             if due(pace.dm_every) {
-                dm_acked(&mut b, &a, &format!("oxymesh soak {run}/{runs}")).map(Some)
+                dm_acked(b, a, &format!("oxymesh soak {run}/{runs}")).map(Some)
             } else {
                 skip()
             },
-            ping(&mut a, &b).map(Some),
-            ping(&mut b, &a).map(Some),
+            ping(a, b).map(Some),
+            ping(b, a).map(Some),
         ];
         for (i, r) in results.iter().enumerate() {
             match r {
                 Err(e) if e == "skipped" => {}
+                // Cut short by Ctrl-C: not a failed check.
+                Err(e) if e.ends_with(": interrupted") => {}
                 Ok(t) => {
                     tally[i].0 += 1;
                     if let (Some(t), Some(v)) = (t, times.get_mut(i.saturating_sub(2))) {
@@ -1011,14 +1041,10 @@ pub fn soak(
             }
         );
         if pace.gap_s > 0 && run < runs {
-            std::thread::sleep(Duration::from_secs(pace.gap_s));
+            crate::stop::sleep(pace.gap_s);
         }
     }
-    let (ta, tb) = (a.other.1, b.other.1);
-    let _ = open_telemetry(&mut a, Some(ta));
-    let _ = open_telemetry(&mut b, Some(tb));
-    restore(&mut a, &mut b);
-    println!("\n{runs} runs in {} s:", t_start.elapsed().as_secs());
+    println!("\n{done} runs in {} s:", t_start.elapsed().as_secs());
     for (i, n) in names.iter().enumerate() {
         let (ok, ko) = tally[i];
         let t = i

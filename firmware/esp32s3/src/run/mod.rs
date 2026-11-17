@@ -5,10 +5,31 @@
 
 pub mod boot;
 pub mod bt;
+pub mod crash;
 pub mod link;
 pub mod radio;
 pub mod server;
 pub mod sleep;
+
+/// The clock at boot, until something sets it: the time of the commit this firmware was built
+/// from (`build.rs`). The node stamps its packets from here; the screens show no time until
+/// the clock is set. No clock chip time before it can be right, so none is trusted: that is
+/// how another firmware's stale time is told from a good one.
+pub const BOOT_EPOCH: u32 = decimal(env!("OXYMESH_BUILD_EPOCH"));
+
+/// The build date the device reports (`DD-Mon-YYYY`, UTC), from the same commit.
+pub const BUILD_DATE: &str = env!("OXYMESH_BUILD_DATE");
+
+const fn decimal(s: &str) -> u32 {
+    let b = s.as_bytes();
+    let mut v = 0u32;
+    let mut i = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as u32;
+        i += 1;
+    }
+    v
+}
 
 /// The earliest of the times something is due, for the main loop's sleep.
 pub struct Deadline(embassy_time::Instant);

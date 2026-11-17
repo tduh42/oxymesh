@@ -29,9 +29,19 @@ use crate::theme;
 pub use chat::{Compose, Conversation, Messages, Target};
 pub use contact::{ChannelScreen, ContactScreen};
 pub use home::Home;
-pub use info::{About, Card, Soon, contact_link as info_link};
+pub use info::{About, Card, contact_link as info_link};
 pub use lists::{Channels, Contacts, Pick};
 pub use menu::{Action, Item, Menu};
+
+/// The noise floor as text. It reads 0 until the first sampling round ends (about 2 s after
+/// boot or a radio reset), which is no measurement.
+pub fn noise_text(dbm: i16) -> String {
+    if dbm == 0 {
+        String::from("-- dBm")
+    } else {
+        alloc::format!("{dbm} dBm")
+    }
+}
 
 /// Where a menu item leads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,14 +102,14 @@ pub fn open(d: Dest) -> Box<dyn Screen> {
         Dest::Map => Box::new(tools::Map::default()),
         Dest::Discover => Box::new(admin::Discover::default()),
         Dest::AdminPick => Box::new(Contacts::pick_for(lists::Pick::Admin)),
-        Dest::Radio
-        | Dest::Bluetooth
-        | Dest::ContactSettings
-        | Dest::Display
-        | Dest::Notifications
-        | Dest::Telemetry
-        | Dest::Power
-        | Dest::Time => settings::open(d).unwrap_or_else(|| Box::new(Soon::new("Settings", ""))),
+        Dest::Radio => Box::new(settings::radio()),
+        Dest::Bluetooth => Box::new(settings::bluetooth()),
+        Dest::ContactSettings => Box::new(settings::contacts()),
+        Dest::Display => Box::new(settings::display()),
+        Dest::Notifications => Box::new(settings::notifications()),
+        Dest::Telemetry => Box::new(settings::telemetry()),
+        Dest::Power => Box::new(settings::power()),
+        Dest::Time => Box::new(settings::time()),
     }
 }
 

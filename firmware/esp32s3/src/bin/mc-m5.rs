@@ -48,7 +48,7 @@ use mc_ui::input::{Button, Gestures};
 use mc_ui::overlay::{self, Overlay, PixelRect};
 use mc_ui::panel::{self, COMPACT, Grid, LARGE};
 use mc_ui::refresh::{self, Kind, Policy};
-use mc_ui::{App, Ble, Ctx, Intent, Outcome, perform};
+use mc_ui::{App, Ble, Ctx, Health, Intent, Outcome, RxSeen, perform};
 use oxymesh_esp32s3::battery::{Smoother, percent};
 use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::buzzer;
@@ -58,7 +58,7 @@ use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, NoFrontEnd, Radio, Tx};
-use oxymesh_esp32s3::run::{self, Deadline, boot, mc_now};
+use oxymesh_esp32s3::run::{self, BOOT_EPOCH, Deadline, boot, crash, mc_now};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -72,7 +72,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const INFO: Info = Info {
     manufacturer: "Elecrow ThinkNode M5",
     version: "v1.18.0-oxymesh",
-    build_date: "06-Nov-2026",
+    build_date: run::BUILD_DATE,
     max_tx_power: m5::TX_POWER_MAX,
     has_gps: true,
     front_end: FrontEnd::None,
@@ -86,9 +86,6 @@ const HEAP_SIZE: usize = 24 * 1024;
 const HEAP_RECLAIMED: usize = 72 * 1024;
 /// How often screens get their tick (range test pings, toasts).
 const UI_TICK_MS: u64 = 250;
-/// The clock at boot until something sets it (2026-11-05); an older clock chip time is not
-/// trusted.
-const BOOT_EPOCH: u32 = 1_793_900_000;
 /// The unread LED blinks this often, this long.
 const BLINK_EVERY_MS: u64 = 5_000;
 const BLINK_MS: u64 = 80;
@@ -117,35 +114,6 @@ fn to_panel(src: &Frame, dst: &mut Frame, invert: bool, rotate: bool) {
             src.bits.get(i).copied().unwrap_or(0xFF)
         };
         *d = if invert { !b } else { b };
-    }
-}
-
-/// Reset reasons of the last four boots, oldest first (`esp_hal::system::reset_reason`), kept
-/// in RTC memory across resets that leave the power on: what ended a run no log could see.
-/// The `debug-log` build prints them on its status line.
-mod boots {
-    #[esp_hal::ram(unstable(rtc_fast, persistent))]
-    static mut BOOTS: [u32; 5] = [0; 5];
-    const MAGIC: u32 = 0x0B00_75ED;
-
-    pub fn note() {
-        let r = esp_hal::system::reset_reason().map_or(0, |r| r as u32);
-        // SAFETY: written once at boot, before anything else runs; read only afterwards.
-        unsafe {
-            let b = &mut *(&raw mut BOOTS);
-            if b[0] != MAGIC {
-                *b = [MAGIC, 0, 0, 0, 0];
-            }
-            b.copy_within(2..5, 1);
-            b[4] = r;
-        }
-    }
-
-    #[cfg_attr(not(feature = "debug-log"), allow(dead_code))]
-    pub fn last() -> [u32; 4] {
-        // SAFETY: see `note`.
-        let b = unsafe { *(&raw const BOOTS) };
-        [b[1], b[2], b[3], b[4]]
     }
 }
 
@@ -232,14 +200,14 @@ mod diag {
             self.passes = 0;
             self.busy_us = 0;
             self.window = embassy_time::Instant::now();
-            if self.reads % 6 == 0 {
+            if self.reads.is_multiple_of(6) {
                 if self.history.is_full() {
                     self.history.pop_front();
                 }
                 let min = (embassy_time::Instant::now().as_secs() / 60) as u32;
                 let _ = self.history.push_back((min, battery_mv, usb, noise));
             }
-            if self.reads % 6 == 0 {
+            if self.reads.is_multiple_of(6) {
                 let mut line: heapless::String<1800> = heapless::String::new();
                 for (m, mv, usb, nf) in &self.history {
                     let _ = core::fmt::write(
@@ -281,8 +249,41 @@ fn ble_of(sh: &Shared) -> Ble {
     }
 }
 
+/// What only the runner knows, for the screens: the device's health (ADR-0013), the satellites
+/// a searching GPS uses, and what the radio chip received.
+struct Seen<'a> {
+    health: Health<'a>,
+    gps_searching: Option<u8>,
+    rx: RxSeen,
+}
+
+fn seen<'a>(
+    panic: &'a Option<crash::Panic>,
+    radio: &Radio<'_, NoFrontEnd>,
+    store_errors: u32,
+    gps: Option<&gps::Gps<'_>>,
+) -> Seen<'a> {
+    let r = radio.health();
+    let rc = radio.rx_counts;
+    Seen {
+        health: Health {
+            restart: crash::restart(),
+            panics: panic.as_ref().map_or(0, |p| p.count),
+            panic_at: panic.as_ref().map(|p| (p.file(), p.line)),
+            radio_recoveries: r.recoveries,
+            radio_down: r.down,
+            store_errors,
+        },
+        gps_searching: gps.filter(|g| g.is_on()).map(|g| g.satellites()),
+        rx: RxSeen {
+            ok: rc.done,
+            damaged: rc.crc.saturating_add(rc.header),
+        },
+    }
+}
+
 /// What the screen sees for one draw or one input.
-fn ui_ctx(dev: &Device, ble: Ble, charging: bool, light: bool) -> Ctx<'_> {
+fn ui_ctx<'a>(dev: &'a Device, ble: Ble, charging: bool, light: bool, seen: Seen<'a>) -> Ctx<'a> {
     Ctx {
         dev,
         now_ms: Instant::now().as_millis(),
@@ -296,7 +297,11 @@ fn ui_ctx(dev: &Device, ble: Ble, charging: bool, light: bool) -> Ctx<'_> {
             lon: f.lon,
             satellites: f.satellites,
         }),
+        // No count once there is a fix: the fix carries its own.
+        gps_searching: seen.gps_searching.filter(|_| dev.gps().is_none()),
         ble,
+        health: seen.health,
+        rx: Some(seen.rx),
     }
 }
 
@@ -333,8 +338,11 @@ async fn main(_spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     #[cfg(feature = "debug-log")]
     diag::paint();
-    boots::note();
+    crash::note();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    // From here on a loop that stops turning restarts the chip (ADR-0013).
+    let mut watchdog = crash::Watchdog::start(p.RTC_TIMER);
+    let last_panic = crash::last_panic();
     let lpwr = p.LPWR;
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
@@ -428,11 +436,15 @@ async fn main(_spawner: Spawner) -> ! {
     let hw = esp_hal::rng::Rng::new();
     let mut rng =
         ChaCha20Rng::seed_from_u64((u64::from(hw.random()) << 32) | u64::from(hw.random()));
+    // Storage at boot has no fixed bound (a first boot imports the C++ firmware's data): the
+    // watchdog waits for the main loop (ADR-0013).
+    watchdog.stop();
     let id = boot::identity(&mut store, cpp_fs, &hw);
     let prefs = Prefs::defaults(id.pub_key());
     let dev = DEVICE.take();
     dev.node.reset(id, prefs, BOOT_EPOCH, mc_now());
     store.load(dev);
+    watchdog.resume();
     // The clock chip kept the time across the reboot or power-off, unless it lost power.
     match rtc_chip.as_mut().and_then(Pcf8563::read) {
         Some(t) if t >= BOOT_EPOCH => {
@@ -539,7 +551,8 @@ async fn main(_spawner: Spawner) -> ! {
     let panel_frame = PANEL.init(Frame::new());
     let mut app = App::new(grid_of(&dev.node.prefs), true);
     {
-        let c = ui_ctx(dev, ble_of(&ble_sh), usb_in.is_high(), light);
+        let seen = seen(&last_panic, &radio, store.errors, gps_rx.as_ref());
+        let c = ui_ctx(dev, ble_of(&ble_sh), usb_in.is_high(), light, seen);
         app.start(&c);
     }
     let mut gestures = Gestures::new();
@@ -563,7 +576,10 @@ async fn main(_spawner: Spawner) -> ! {
         let mut term = Terminal::new(panel::backend(panel_frame, app.grid())).expect("terminal");
         #[cfg(feature = "debug-log")]
         let mut power = diag::Power::new();
+        #[cfg(feature = "debug-log")]
+        let mut crash_test: Option<u64> = None;
         loop {
+            watchdog.feed();
             #[cfg(feature = "debug-log")]
             let pass_start = Instant::now();
             let now = mc_now();
@@ -614,6 +630,7 @@ async fn main(_spawner: Spawner) -> ! {
                         esp_hal::system::software_reset();
                     }
                     Action::FactoryReset => {
+                        watchdog.stop();
                         store.erase_all();
                         Timer::after(Duration::from_millis(1000)).await;
                         esp_hal::system::software_reset();
@@ -649,7 +666,7 @@ async fn main(_spawner: Spawner) -> ! {
                 store.add_bond(&b);
                 ble_sh.paired.set(store.bonds().len() as u8);
             }
-            let ble = ble_of(&ble_sh);
+            let ble = ble_of(ble_sh);
             if ble != last_ble {
                 last_ble = ble;
                 want_draw = true;
@@ -666,7 +683,7 @@ async fn main(_spawner: Spawner) -> ! {
                     info!(
                         "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {}; clock chip {:?} (lost power, time); rx {} flood {} direct",
                         Instant::now().as_secs(),
-                        boots::last(),
+                        crash::boots(),
                         if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
                             "on"
                         } else {
@@ -703,6 +720,16 @@ async fn main(_spawner: Spawner) -> ! {
                         st.recv_flood,
                         st.recv_direct
                     );
+                    let h = radio.health();
+                    info!(
+                        "health: started {}; panics {:?}; radio recoveries {} failures {} down {}; store errors {}",
+                        crash::restart(),
+                        last_panic.as_ref().map(|p| (p.count, p.file(), p.line)),
+                        h.recoveries,
+                        h.failures,
+                        h.down,
+                        store.errors
+                    );
                 }
                 let raw_mv = adc.read_blocking(&mut bat_pin);
                 dev.battery_mv =
@@ -714,14 +741,54 @@ async fn main(_spawner: Spawner) -> ! {
             // Interface: notifications, buttons, timers.
             let now_ms = Instant::now().as_millis();
             let charging = usb_in.is_high();
+            // While text is typed, B deletes at each press: no double click to wait for.
+            gestures.set_immediate_b(app.typing());
             gestures.edge(Button::A, btn_a.is_low(), now_ms);
             gestures.edge(Button::B, btn_b.is_low(), now_ms);
+            // `debug-log` only, to prove the restarts on the device (ADR-0013): B held 15 s
+            // panics; A and B held 15 s stop the loop, for the watchdog to find.
+            #[cfg(feature = "debug-log")]
+            if btn_b.is_low() {
+                let since = *crash_test.get_or_insert(now_ms);
+                if now_ms.saturating_sub(since) >= 15_000 {
+                    if btn_a.is_low() {
+                        info!("test: the loop stops here, the watchdog restarts the chip");
+                        loop {
+                            core::hint::spin_loop();
+                        }
+                    }
+                    panic!("test: B held 15 s");
+                }
+            } else {
+                crash_test = None;
+            }
+            // The same with no hand on the buttons: built with OXYMESH_CRASH_TEST=panic (or
+            // =hang), a boot after power-on does it once, 20 s in.
+            #[cfg(feature = "debug-log")]
+            if let Some(kind) = option_env!("OXYMESH_CRASH_TEST")
+                && crash::restart() == "power on"
+                && now_ms >= 20_000
+            {
+                if kind == "hang" {
+                    info!("test: the loop stops here, the watchdog restarts the chip");
+                    loop {
+                        core::hint::spin_loop();
+                    }
+                }
+                panic!("test: OXYMESH_CRASH_TEST");
+            }
             let mut events: heapless::Vec<UiEvent, 32> = heapless::Vec::new();
             while let Some(e) = dev.poll_ui() {
                 let _ = events.push(e);
             }
             {
-                let c = ui_ctx(dev, ble_of(&ble_sh), charging, light);
+                let c = ui_ctx(
+                    dev,
+                    ble_of(ble_sh),
+                    charging,
+                    light,
+                    seen(&last_panic, &radio, store.errors, gps_rx.as_ref()),
+                );
                 let phone = ble_sh.state.get() == mc_ui::BleState::Connected;
                 for e in &events {
                     app.event(e, &c);
@@ -779,6 +846,7 @@ async fn main(_spawner: Spawner) -> ! {
                 match o {
                     Outcome::CppImport => {
                         if let Some(mut fs) = cpp_fs() {
+                            watchdog.feed();
                             let r = cpp::import(&mut fs, dev.node.prefs.ui, &mut store);
                             info!("import: {r:?}");
                             if r.is_ok() {
@@ -805,11 +873,13 @@ async fn main(_spawner: Spawner) -> ! {
                         let _ = ble_sh.control.try_send(Control::ForgetAll);
                     }
                     Outcome::FactoryReset => {
+                        watchdog.stop();
                         store.erase_all();
                         Timer::after(Duration::from_millis(1000)).await;
                         esp_hal::system::software_reset();
                     }
                     Outcome::Hibernate => {
+                        watchdog.stop();
                         dev.flush_contacts(&mut store);
                         let [cur, _] = &mut *frames;
                         let badge = term.backend_mut().display_mut();
@@ -842,7 +912,13 @@ async fn main(_spawner: Spawner) -> ! {
                     }
                     _ => {}
                 }
-                let c = ui_ctx(dev, ble_of(&ble_sh), charging, light);
+                let c = ui_ctx(
+                    dev,
+                    ble_of(ble_sh),
+                    charging,
+                    light,
+                    seen(&last_panic, &radio, store.errors, gps_rx.as_ref()),
+                );
                 app.done(&i, &o, &c);
                 if app.sync(&c) {
                     drop(term);
@@ -883,9 +959,11 @@ async fn main(_spawner: Spawner) -> ! {
 
             // Drawing: on changes, the minute, a battery step of 5 %; never while BUSY.
             let minute = dev.node.rtc.now(mc_now()) / 60;
-            let pct = (dev.battery_mv > 0)
-                .then(|| percent(dev.battery_mv))
-                .unwrap_or(0);
+            let pct = if dev.battery_mv > 0 {
+                percent(dev.battery_mv)
+            } else {
+                0
+            };
             if minute != last_minute || pct.abs_diff(last_percent) >= 5 {
                 last_minute = minute;
                 last_percent = pct;
@@ -896,7 +974,13 @@ async fn main(_spawner: Spawner) -> ! {
                 let [cur, prev] = &mut *frames;
                 if want_draw {
                     want_draw = false;
-                    let c = ui_ctx(dev, ble_of(&ble_sh), charging, light);
+                    let c = ui_ctx(
+                        dev,
+                        ble_of(ble_sh),
+                        charging,
+                        light,
+                        seen(&last_panic, &radio, store.errors, gps_rx.as_ref()),
+                    );
                     #[cfg(feature = "debug-log")]
                     let t0 = Instant::now();
                     let _ = term.draw(|f| app.draw(f, &c));

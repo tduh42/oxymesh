@@ -301,6 +301,12 @@ impl Server {
         self.save_acl_at = Some(now + Duration::from_millis(LAZY_SAVE_MS));
     }
 
+    /// Before a restart or a power-off: whether the access list still waits for its lazy save.
+    /// The runner then saves it at once ([`Action::SaveAcl`]), or the change would be lost.
+    pub fn take_pending_acl_save(&mut self) -> bool {
+        self.save_acl_at.take().is_some()
+    }
+
     /// When `tick` has something to do next.
     pub fn next_wakeup(&self) -> Option<Instant> {
         let temp = self
