@@ -48,7 +48,7 @@ use mc_ui::input::{Button, Gestures};
 use mc_ui::overlay::{self, Overlay, PixelRect};
 use mc_ui::panel::{self, COMPACT, Grid, LARGE};
 use mc_ui::refresh::{self, Kind, Policy};
-use mc_ui::{App, Ble, Ctx, Health, Intent, Outcome, perform};
+use mc_ui::{App, Ble, Ctx, Health, Intent, Outcome, RxSeen, perform};
 use oxymesh_esp32s3::battery::{Smoother, percent};
 use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::buzzer;
@@ -58,7 +58,7 @@ use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, NoFrontEnd, Radio, Tx};
-use oxymesh_esp32s3::run::{self, Deadline, boot, crash, mc_now};
+use oxymesh_esp32s3::run::{self, BOOT_EPOCH, Deadline, boot, crash, mc_now};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -72,7 +72,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const INFO: Info = Info {
     manufacturer: "Elecrow ThinkNode M5",
     version: "v1.18.0-oxymesh",
-    build_date: "06-Nov-2026",
+    build_date: run::BUILD_DATE,
     max_tx_power: m5::TX_POWER_MAX,
     has_gps: true,
     front_end: FrontEnd::None,
@@ -86,9 +86,6 @@ const HEAP_SIZE: usize = 24 * 1024;
 const HEAP_RECLAIMED: usize = 72 * 1024;
 /// How often screens get their tick (range test pings, toasts).
 const UI_TICK_MS: u64 = 250;
-/// The clock at boot until something sets it (2026-11-05); an older clock chip time is not
-/// trusted.
-const BOOT_EPOCH: u32 = 1_793_900_000;
 /// The unread LED blinks this often, this long.
 const BLINK_EVERY_MS: u64 = 5_000;
 const BLINK_MS: u64 = 80;
@@ -252,30 +249,41 @@ fn ble_of(sh: &Shared) -> Ble {
     }
 }
 
-/// The device's health as About shows it (ADR-0013).
-fn health_of(
-    panic: &Option<crash::Panic>,
-    radio: mc_core::radio_health::Report,
+/// What only the runner knows, for the screens: the device's health (ADR-0013), the satellites
+/// a searching GPS uses, and what the radio chip received.
+struct Seen<'a> {
+    health: Health<'a>,
+    gps_searching: Option<u8>,
+    rx: RxSeen,
+}
+
+fn seen<'a>(
+    panic: &'a Option<crash::Panic>,
+    radio: &Radio<'_, NoFrontEnd>,
     store_errors: u32,
-) -> Health<'_> {
-    Health {
-        restart: crash::restart(),
-        panics: panic.as_ref().map_or(0, |p| p.count),
-        panic_at: panic.as_ref().map(|p| (p.file(), p.line)),
-        radio_recoveries: radio.recoveries,
-        radio_down: radio.down,
-        store_errors,
+    gps: Option<&gps::Gps<'_>>,
+) -> Seen<'a> {
+    let r = radio.health();
+    let rc = radio.rx_counts;
+    Seen {
+        health: Health {
+            restart: crash::restart(),
+            panics: panic.as_ref().map_or(0, |p| p.count),
+            panic_at: panic.as_ref().map(|p| (p.file(), p.line)),
+            radio_recoveries: r.recoveries,
+            radio_down: r.down,
+            store_errors,
+        },
+        gps_searching: gps.filter(|g| g.is_on()).map(|g| g.satellites()),
+        rx: RxSeen {
+            ok: rc.done,
+            damaged: rc.crc.saturating_add(rc.header),
+        },
     }
 }
 
 /// What the screen sees for one draw or one input.
-fn ui_ctx<'a>(
-    dev: &'a Device,
-    ble: Ble,
-    charging: bool,
-    light: bool,
-    health: Health<'a>,
-) -> Ctx<'a> {
+fn ui_ctx<'a>(dev: &'a Device, ble: Ble, charging: bool, light: bool, seen: Seen<'a>) -> Ctx<'a> {
     Ctx {
         dev,
         now_ms: Instant::now().as_millis(),
@@ -289,8 +297,11 @@ fn ui_ctx<'a>(
             lon: f.lon,
             satellites: f.satellites,
         }),
+        // No count once there is a fix: the fix carries its own.
+        gps_searching: seen.gps_searching.filter(|_| dev.gps().is_none()),
         ble,
-        health,
+        health: seen.health,
+        rx: Some(seen.rx),
     }
 }
 
@@ -536,8 +547,8 @@ async fn main(_spawner: Spawner) -> ! {
     let panel_frame = PANEL.init(Frame::new());
     let mut app = App::new(grid_of(&dev.node.prefs), true);
     {
-        let health = health_of(&last_panic, radio.health(), store.errors);
-        let c = ui_ctx(dev, ble_of(&ble_sh), usb_in.is_high(), light, health);
+        let seen = seen(&last_panic, &radio, store.errors, gps_rx.as_ref());
+        let c = ui_ctx(dev, ble_of(&ble_sh), usb_in.is_high(), light, seen);
         app.start(&c);
     }
     let mut gestures = Gestures::new();
@@ -726,6 +737,8 @@ async fn main(_spawner: Spawner) -> ! {
             // Interface: notifications, buttons, timers.
             let now_ms = Instant::now().as_millis();
             let charging = usb_in.is_high();
+            // While text is typed, B deletes at each press: no double click to wait for.
+            gestures.set_immediate_b(app.typing());
             gestures.edge(Button::A, btn_a.is_low(), now_ms);
             gestures.edge(Button::B, btn_b.is_low(), now_ms);
             // `debug-log` only, to prove the restarts on the device (ADR-0013): B held 15 s
@@ -770,7 +783,7 @@ async fn main(_spawner: Spawner) -> ! {
                     ble_of(ble_sh),
                     charging,
                     light,
-                    health_of(&last_panic, radio.health(), store.errors),
+                    seen(&last_panic, &radio, store.errors, gps_rx.as_ref()),
                 );
                 let phone = ble_sh.state.get() == mc_ui::BleState::Connected;
                 for e in &events {
@@ -900,7 +913,7 @@ async fn main(_spawner: Spawner) -> ! {
                     ble_of(ble_sh),
                     charging,
                     light,
-                    health_of(&last_panic, radio.health(), store.errors),
+                    seen(&last_panic, &radio, store.errors, gps_rx.as_ref()),
                 );
                 app.done(&i, &o, &c);
                 if app.sync(&c) {
@@ -962,7 +975,7 @@ async fn main(_spawner: Spawner) -> ! {
                         ble_of(ble_sh),
                         charging,
                         light,
-                        health_of(&last_panic, radio.health(), store.errors),
+                        seen(&last_panic, &radio, store.errors, gps_rx.as_ref()),
                     );
                     #[cfg(feature = "debug-log")]
                     let t0 = Instant::now();

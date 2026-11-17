@@ -50,7 +50,7 @@ use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::radio::{Chip, NoFrontEnd, Radio, Tx, lora_of};
 use oxymesh_esp32s3::run::server::Console;
 use oxymesh_esp32s3::run::sleep::{self, Saver};
-use oxymesh_esp32s3::run::{Deadline, boot, crash, mc_now, server};
+use oxymesh_esp32s3::run::{BOOT_EPOCH, BUILD_DATE, Deadline, boot, crash, mc_now, server};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -59,12 +59,9 @@ use rand_core::SeedableRng;
 use static_cell::{ConstStaticCell, StaticCell};
 
 const VERSION: &str = "v1.18.0-oxymesh";
-const BUILD_DATE: &str = "10-Nov-2026";
 const MANUFACTURER: &str = "Elecrow ThinkNode M5";
 const HEAP_SIZE: usize = 24 * 1024;
 const HEAP_RECLAIMED: usize = 72 * 1024;
-/// The clock at boot until something sets it; an older clock chip time is not trusted.
-const BOOT_EPOCH: u32 = 1_793_900_000;
 /// The e-paper is redrawn at most this often, unless a button was pressed.
 const REDRAW_MS: u64 = 30_000;
 

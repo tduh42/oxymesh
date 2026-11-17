@@ -44,7 +44,7 @@ use oxymesh_esp32s3::ble::{Control, Shared};
 use oxymesh_esp32s3::heltec_v4::{self as board, Fem, UsbWire};
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, Radio, Tx};
-use oxymesh_esp32s3::run::{self, Deadline, boot, crash, mc_now};
+use oxymesh_esp32s3::run::{self, BOOT_EPOCH, Deadline, boot, crash, mc_now};
 use oxymesh_esp32s3::ssd1306::Ssd1306;
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -58,7 +58,7 @@ const INFO: Info = Info {
     // Replaced at boot by the name of the front end found ("Heltec V4.3 OLED").
     manufacturer: "Heltec V4 OLED",
     version: "v1.18.0-oxymesh",
-    build_date: "09-Nov-2026",
+    build_date: run::BUILD_DATE,
     max_tx_power: board::TX_POWER_MAX,
     has_gps: false,
     front_end: FrontEnd::Pa,
@@ -68,8 +68,6 @@ const INFO: Info = Info {
 const HEAP_SIZE: usize = 24 * 1024;
 /// Second heap region, in the RAM the bootloader gives back.
 const HEAP_RECLAIMED: usize = 72 * 1024;
-/// The clock at boot until a phone sets it (no clock chip on this board).
-const BOOT_EPOCH: u32 = 1_793_900_000;
 /// Screen ticks (notes expiring, the clock).
 const UI_TICK_MS: u64 = 500;
 /// The screen goes dark after this long without a press, unless the settings say otherwise.
@@ -99,11 +97,13 @@ fn ctx(dev: &Device, ble: Ble, charging: bool) -> Ctx<'_> {
         charging,
         light: true,
         gps: None,
+        gps_searching: None,
         ble,
         health: Health {
             restart: crash::restart(),
             ..Default::default()
         },
+        rx: None,
     }
 }
 

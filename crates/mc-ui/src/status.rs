@@ -288,7 +288,7 @@ fn header(c: &Ctx<'_>, page: usize) -> String {
 }
 
 fn home(c: &Ctx<'_>) -> [String; 5] {
-    let t = clock::local(c.unix, c.tz_offset_min);
+    let t = c.time();
     let unread = c.dev.unread_alerting();
     let ble = match c.ble.state {
         BleState::Off => String::from("Bluetooth off"),
@@ -304,7 +304,7 @@ fn home(c: &Ctx<'_>) -> [String; 5] {
             format!("{unread} unread")
         },
         ble,
-        format!("Noise {} dBm", c.dev.noise_floor),
+        format!("Noise {}", crate::screens::noise_text(c.dev.noise_floor)),
         String::new(),
     ]
 }
@@ -396,7 +396,7 @@ fn radio(c: &Ctx<'_>) -> [String; 5] {
         format!("{}.{:03} MHz", r.freq_khz / 1000, r.freq_khz % 1000),
         format!("SF{} BW{bw} CR4/{}", r.sf, r.cr),
         format!("TX {} dBm", r.tx_power_dbm),
-        format!("Noise {} dBm", c.dev.noise_floor),
+        format!("Noise {}", crate::screens::noise_text(c.dev.noise_floor)),
     ]
 }
 

@@ -13,7 +13,7 @@ use ratatui_widgets::list::ListState;
 
 use super::chat::{Compose, Target};
 use super::menu::{Action, Item, Menu};
-use super::{Dest, draw_list, step};
+use super::{draw_list, step};
 use crate::act::{Intent, Outcome};
 use crate::app::{BleState, Confirm, Input, Nav, Screen, Ui};
 use crate::{clock, regions};
@@ -831,7 +831,7 @@ pub fn time() -> Menu {
             ),
             Item::with(
                 "Clock",
-                |ui| clock::hhmm(clock::local(ui.ctx.unix, prefs(ui).ui.tz_offset_min)),
+                |ui| clock::hhmm(ui.ctx.time()),
                 Action::Run(|_| Nav::Toast(String::from("Set by the phone app or the GPS"))),
             ),
         ],
@@ -853,19 +853,4 @@ pub fn location_toggle(ui: &Ui<'_>) -> Nav {
 
 pub fn location_state(ui: &Ui<'_>) -> String {
     yes(prefs(ui).advert_loc_policy != 0)
-}
-
-/// For menus pointing here.
-pub fn open(d: Dest) -> Option<Box<dyn Screen>> {
-    Some(match d {
-        Dest::Radio => Box::new(radio()),
-        Dest::Bluetooth => Box::new(bluetooth()),
-        Dest::ContactSettings => Box::new(contacts()),
-        Dest::Display => Box::new(display()),
-        Dest::Notifications => Box::new(notifications()),
-        Dest::Telemetry => Box::new(telemetry()),
-        Dest::Power => Box::new(power()),
-        Dest::Time => Box::new(time()),
-        _ => return None,
-    })
 }

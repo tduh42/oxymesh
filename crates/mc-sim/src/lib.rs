@@ -176,7 +176,9 @@ impl World {
         let n = name.len().min(31);
         prefs.name[..n].copy_from_slice(&name.as_bytes()[..n]);
         tweak(&mut prefs);
-        let node = Node::new(id, prefs, EPOCH, self.now);
+        let mut node = Node::new(id, prefs, EPOCH, self.now);
+        // A simulated device knows the time (a real one shows none until something sets it).
+        node.rtc.set(self.now, EPOCH);
         let seed = self.rng.next_u64();
         let mut dev = Device::new(node, SIM_INFO);
         dev.connected = true;

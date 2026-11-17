@@ -37,6 +37,8 @@ fn ctx(w: &World) -> Ctx<'_> {
         light: false,
         ble: mc_ui::Ble::default(),
         health: mc_ui::Health::default(),
+        gps_searching: None,
+        rx: None,
         gps: Some(GpsFix {
             lat: 45_923_700,
             lon: 6_869_400,

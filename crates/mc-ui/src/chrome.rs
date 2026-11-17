@@ -148,7 +148,7 @@ pub fn status(ui: &Ui<'_>, time: bool) -> String {
         parts.push(String::from("BT"));
     }
     if time {
-        parts.push(clock::hhmm(clock::local(c.unix, c.tz_offset_min)));
+        parts.push(clock::hhmm(c.time()));
     }
     if let Some(p) = c.battery_percent {
         parts.push(format!("{p}%{}", if c.charging { "+" } else { "" }));
@@ -243,7 +243,7 @@ pub fn header_scene(w: u16, h: u16, title: &str, time: bool, ui: &Ui<'_>) -> Sce
         right(&mut sc, &mut x, None, Some(Icon::Charging));
     }
     if time {
-        let t = clock::hhmm(clock::local(c.unix, c.tz_offset_min));
+        let t = clock::hhmm(c.time());
         right(&mut sc, &mut x, Some(&t), None);
         x -= 4;
     }

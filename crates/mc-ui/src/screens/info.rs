@@ -17,39 +17,6 @@ use crate::act::{Intent, Outcome};
 use crate::app::{Confirm, Input, Nav, Paint, Screen, Ui};
 use crate::chrome::{self, Footer};
 
-/// A settings page that could not open: its title and a note.
-#[derive(Debug)]
-pub struct Soon {
-    title: String,
-    note: String,
-}
-
-impl Soon {
-    pub fn new(title: &str, note: &str) -> Self {
-        Self {
-            title: String::from(title),
-            note: String::from(note),
-        }
-    }
-}
-
-impl Screen for Soon {
-    fn title(&self, _ui: &Ui<'_>) -> String {
-        self.title.clone()
-    }
-
-    fn draw(&mut self, f: &mut Frame<'_>, body: Rect, _ui: &Ui<'_>) {
-        f.render_widget(
-            Paragraph::new(self.note.as_str()).wrap(Wrap { trim: true }),
-            rows(body, 1, body.height.saturating_sub(1)),
-        );
-    }
-
-    fn footer(&self, _ui: &Ui<'_>) -> Footer {
-        Footer::BACK
-    }
-}
-
 /// The device's health for About (ADR-0013): why it last started, always; what went wrong since
 /// the power came on, only when something did.
 fn health_lines(h: &crate::app::Health<'_>) -> Vec<(&'static str, String)> {

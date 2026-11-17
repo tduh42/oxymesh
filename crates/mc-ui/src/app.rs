@@ -43,8 +43,34 @@ pub struct Ctx<'a> {
     pub light: bool,
     /// The GPS, when it has a fix.
     pub gps: Option<GpsFix>,
+    /// Satellites the GPS uses while it has no fix yet (`None`: off, or the runner cannot
+    /// tell).
+    pub gps_searching: Option<u8>,
     pub ble: Ble,
     pub health: Health<'a>,
+    /// What the radio chip received since boot (`None` where the runner does not count).
+    pub rx: Option<RxSeen>,
+}
+
+/// Packets the radio chip received since boot, before the node looked at them: the Signal
+/// tool shows them, to tell "nothing on the air" from "nothing readable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RxSeen {
+    /// With a good checksum.
+    pub ok: u32,
+    /// Checksum or header errors: something was there, too weak or too noisy to read.
+    pub damaged: u32,
+}
+
+impl Ctx<'_> {
+    /// The local time, or `None` while nothing has set the clock since boot: the node then
+    /// counts from its floor, which is no time to show (`mc_node::clock::Rtc::is_set`).
+    pub fn time(&self) -> Option<crate::clock::DateTime> {
+        if !self.dev.node.rtc.is_set() {
+            return None;
+        }
+        crate::clock::local(self.unix, self.tz_offset_min)
+    }
 }
 
 /// What the runner knows about the device's own health, shown in About (ADR-0013).
@@ -182,6 +208,10 @@ pub trait Screen: core::fmt::Debug {
     fn keyboard(&self) -> Option<&Keyboard> {
         None
     }
+    /// Text is being typed here: B deletes, one character per press (`App::typing`).
+    fn typing(&self) -> bool {
+        false
+    }
     /// Called regularly while the screen is shown (the range test sends its pings here).
     fn tick(&mut self, _ui: &Ui<'_>) -> Nav {
         Nav::Stay
@@ -308,6 +338,13 @@ impl App {
         self.stack.last().and_then(|s| s.keyboard())
     }
 
+    /// Text is being typed. The runner then makes every short press of B a click at once
+    /// (`Gestures::set_immediate_b`): B deletes there, and must neither wait for a double
+    /// click nor be taken for one.
+    pub fn typing(&self) -> bool {
+        self.stack.last().is_some_and(|s| s.typing())
+    }
+
     /// Something changed since the last draw.
     pub fn take_dirty(&mut self) -> bool {
         core::mem::take(&mut self.dirty)
@@ -425,6 +462,11 @@ impl App {
             self.intents.push(Intent::ToggleLight);
             return;
         }
+        // A phone is pairing: its PIN covers the screen, and a press must not act on a screen
+        // nobody can see.
+        if ctx.ble.state == BleState::Pairing {
+            return;
+        }
         if let Some(seq) = self.banner {
             // The first press acts on the banner and is never lost.
             match g {
@@ -452,6 +494,26 @@ impl App {
                     return;
                 }
                 _ => {}
+            }
+        }
+        // While typing, B only deletes: presses counted as a double click or more are that many
+        // deletes, never Home (two quick deletes would throw the text away). They stop with
+        // the text entry: the press that cancels it is the last.
+        if self.typing() && self.popup.is_none() {
+            let presses = match g {
+                Gesture::Double(Button::B) => 2,
+                Gesture::Triple(Button::B) => 3,
+                Gesture::Quad(Button::B) => 4,
+                _ => 0,
+            };
+            if presses > 0 {
+                for _ in 0..presses {
+                    if !self.typing() {
+                        break;
+                    }
+                    self.gesture(Gesture::Click(Button::B), ctx);
+                }
+                return;
             }
         }
         match g {

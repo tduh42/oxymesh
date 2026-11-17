@@ -68,6 +68,8 @@ fn ctx(w: &mc_sim::World) -> Ctx<'_> {
         light: false,
         ble: mc_ui::Ble::default(),
         health: mc_ui::Health::default(),
+        gps_searching: None,
+        rx: None,
         gps: None,
     }
 }
@@ -166,6 +168,36 @@ fn about_shows_the_devices_health() {
         ..ctx(&w)
     };
     assert!(text(&mut app, COMPACT, &down).contains("not answering"));
+}
+
+/// Until something sets the clock, no screen shows a time of day: the node counts from its
+/// floor, which is not the time.
+#[test]
+fn an_unset_clock_shows_no_time() {
+    let mut w = world();
+    let now = w.now;
+    w.nodes[0].dev.node.rtc = mc_node::clock::Rtc::new(mc_sim::EPOCH, now);
+    {
+        let c = ctx(&w);
+        let mut app = App::new(LARGE, false);
+        let home = text(&mut app, LARGE, &c);
+        assert!(home.contains("--:--"), "{home}");
+        assert!(home.contains("Clock not set"), "{home}");
+        let mut panel = App::new(LARGE, true);
+        draw_panel(&mut panel, LARGE, &c);
+        let texts = body_texts(&panel);
+        assert!(texts.iter().any(|t| t == "--:--"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Clock not set"), "{texts:?}");
+    }
+    // An app or the GPS sets it: the time shows.
+    w.nodes[0].dev.node.rtc.set(now, mc_sim::EPOCH + 30);
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, false);
+    let home = text(&mut app, LARGE, &c);
+    assert!(
+        !home.contains("--:--") && !home.contains("Clock not set"),
+        "{home}"
+    );
 }
 
 #[test]
@@ -382,6 +414,10 @@ fn pairing_covers_the_screen_with_the_pin() {
         let t = text(&mut app, grid, &c);
         assert!(t.contains("048 213"), "{t}");
         insta::assert_snapshot!(format!("ble_pairing_{size}"), t);
+        // The PIN hides the screen: presses do not act on it, the light still answers.
+        press(&mut app, &c, &[Long(A), Click(A), Double(A), Double(B)]);
+        assert_eq!(app.depth(), 1, "nothing opened behind the PIN");
+        assert_eq!(press(&mut app, &c, &[Long(B)]), vec![Intent::ToggleLight]);
         // On the panel, big digits over those cells and nothing else painted.
         let mut app = App::new(grid, true);
         let mut frame = Frame::new();
@@ -736,6 +772,122 @@ fn holding_a_in_the_keyboard_inserts_once() {
         1,
         "{intents:?}"
     );
+}
+
+/// While the GPS searches, Home and the GPS tool say how many satellites it uses (an open sky
+/// reads differently from a room), and the noise floor shows no figure before its first round.
+#[test]
+fn a_searching_gps_counts_its_satellites() {
+    let mut w = world();
+    w.nodes[0].dev.info.has_gps = true;
+    w.nodes[0].dev.node.prefs.gps_enabled = true;
+    w.nodes[0].dev.noise_floor = 0;
+    let searching = Ctx {
+        gps: None,
+        gps_searching: Some(4),
+        ..ctx(&w)
+    };
+    let mut home = App::new(LARGE, true);
+    draw_panel(&mut home, LARGE, &searching);
+    let texts = body_texts(&home);
+    assert!(texts.iter().any(|t| t == "No fix, 4 sats"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "-- dBm"), "{texts:?}");
+    // A runner that cannot count says only that there is no fix.
+    let unknown = Ctx {
+        gps_searching: None,
+        ..searching
+    };
+    draw_panel(&mut home, LARGE, &unknown);
+    assert!(body_texts(&home).iter().any(|t| t == "GPS, no fix"));
+
+    // Tools (4th on Home's launcher) → GPS (9th tool).
+    let mut app = App::new(LARGE, false);
+    press(
+        &mut app,
+        &searching,
+        &[Click(A), Click(A), Click(A), Long(A)],
+    );
+    press(&mut app, &searching, &[Click(A); 8]);
+    press(&mut app, &searching, &[Long(A)]);
+    let tool = text(&mut app, LARGE, &searching);
+    assert!(
+        tool.contains("Searching") && tool.contains("4 satellites"),
+        "{tool}"
+    );
+    assert!(
+        !tool.contains("hold"),
+        "nothing to hold without a fix: {tool}"
+    );
+    assert!(text(&mut app, LARGE, &unknown).contains("Waiting for a fix"));
+    w.nodes[0].dev.node.prefs.gps_enabled = false;
+    let off = Ctx {
+        gps: None,
+        ..ctx(&w)
+    };
+    assert!(text(&mut app, LARGE, &off).contains("GPS off."));
+}
+
+/// The Signal tool shows what the radio chip itself received: readable packets, and ones too
+/// weak or too noisy to read (something was on the air).
+#[test]
+fn the_signal_tool_counts_what_the_chip_received() {
+    let w = world();
+    let c = Ctx {
+        rx: Some(mc_ui::RxSeen {
+            ok: 412,
+            damaged: 15,
+        }),
+        ..ctx(&w)
+    };
+    for grid in [LARGE, COMPACT] {
+        let mut app = App::new(grid, false);
+        // Tools → Signal (5th tool).
+        press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
+        press(&mut app, &c, &[Click(A); 4]);
+        press(&mut app, &c, &[Long(A)]);
+        let s = text(&mut app, grid, &c);
+        assert!(s.contains("412 ok, 15 bad"), "{s}");
+        // Both charts are still there under the extra line.
+        assert!(
+            s.contains("Noise floor, 1 h") && s.contains("Packets per minute"),
+            "{s}"
+        );
+        // A runner that does not count shows no such line.
+        let none = Ctx { rx: None, ..c };
+        assert!(!text(&mut app, grid, &none).contains("Radio"));
+    }
+}
+
+/// While typing, B deletes one character per press, however fast: presses the recognizer
+/// counted as a double click or more never go Home with the text, and the press that cancels
+/// the entry is the last one taken.
+#[test]
+fn quick_deletes_never_throw_the_text_away() {
+    let w = world();
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, false);
+    // Messages, Bob, write; insert "OK" (the first quick reply) twice over.
+    press(&mut app, &c, &[Long(A), Click(A), Long(A), Long(A)]);
+    text(&mut app, LARGE, &c);
+    assert!(app.typing());
+    let typing_depth = app.depth();
+    press(&mut app, &c, &[Long(A)]);
+    assert_eq!(app.keyboard().unwrap().text, "OK");
+    // A double click of B: two deletes, still typing.
+    press(&mut app, &c, &[Double(B)]);
+    assert_eq!(app.keyboard().unwrap().text, "");
+    assert_eq!(app.depth(), typing_depth);
+    // Four presses on an empty text: the first cancels the entry, the rest are dropped.
+    press(&mut app, &c, &[Quad(B)]);
+    assert!(!app.typing());
+    assert_eq!(
+        app.depth(),
+        typing_depth - 1,
+        "back on the conversation only"
+    );
+    // Outside text entry a double click of B still goes Home.
+    press(&mut app, &c, &[Double(B)]);
+    assert_eq!(app.depth(), 1);
 }
 
 /// Message previews off: the banner, Home and the lists show no text ("Sender only"), and

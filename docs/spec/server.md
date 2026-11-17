@@ -372,7 +372,7 @@ To be written with milestone S2.
 | Name at first start (`ADVERT_NAME`) | `Thinknode M5 Repeater`, `Thinknode M5 Room Server` | `Heltec Repeater`, `Heltec Room` |
 | Neighbours (`MAX_NEIGHBOURS`) | 8 | 50 |
 | GPS | yes: `gps` commands, position, clock | no |
-| Clock chip | PCF8563, read at boot, written when the clock is set | none: the clock starts at 2026-11-05 until `time` or `clock sync` |
+| Clock chip | PCF8563, read at boot, written when the clock is set | none: the clock starts at the firmware's build time (`run::BOOT_EPOCH`) and the pages show `--:--` until `time` or `clock sync` |
 | Front end | none | GC1109 or KCT8103L (`radio.fem.rxgain`, regulatory gain) |
 | Screen | e-paper, §13 of `ui.md` | OLED, §13 of `ui.md` |
 

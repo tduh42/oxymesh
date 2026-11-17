@@ -31,4 +31,4 @@ pub mod tour;
 pub mod tune;
 
 pub use act::{Intent, Outcome, perform};
-pub use app::{App, Ble, BleState, Ctx, Health};
+pub use app::{App, Ble, BleState, Ctx, Health, RxSeen};

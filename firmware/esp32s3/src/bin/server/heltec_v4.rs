@@ -38,7 +38,7 @@ use oxymesh_esp32s3::heltec_v4::{self as board, Fem, UsbWire};
 use oxymesh_esp32s3::run::radio::{Chip, Radio, Tx, lora_of};
 use oxymesh_esp32s3::run::server::Console;
 use oxymesh_esp32s3::run::sleep::{self, Saver};
-use oxymesh_esp32s3::run::{Deadline, boot, crash, mc_now, server};
+use oxymesh_esp32s3::run::{BOOT_EPOCH, BUILD_DATE, Deadline, boot, crash, mc_now, server};
 use oxymesh_esp32s3::ssd1306::Ssd1306;
 use oxymesh_esp32s3::sx126x::Sx126x;
 use oxymesh_esp32s3::tsens::ChipTemp;
@@ -47,12 +47,9 @@ use rand_core::SeedableRng;
 use static_cell::{ConstStaticCell, StaticCell};
 
 const VERSION: &str = "v1.18.0-oxymesh";
-const BUILD_DATE: &str = "10-Nov-2026";
 /// Heap for the status pages (text, a few KB).
 const HEAP_SIZE: usize = 24 * 1024;
 const HEAP_RECLAIMED: usize = 72 * 1024;
-/// The clock at boot until an admin sets it (no clock chip on this board).
-const BOOT_EPOCH: u32 = 1_793_900_000;
 const UI_TICK_MS: u64 = 500;
 const SCREEN_TIMEOUT_MS: u64 = 60_000;
 

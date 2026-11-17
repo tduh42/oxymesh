@@ -33,6 +33,8 @@ Source of truth for `mc-ui`. On-screen text **in English**. 200×200 black and w
 - A hold acts once, at 1 s, as a long press (holding is how people validate: on the M5, presses held past a second used to scroll instead). The rest of that hold is dropped, even when the press changed the screen. A hold-to-confirm popup counts only a hold that started on it: the hold that opened it never confirms it.
 - **Home's shortcuts, button B:** three quick presses cycle the buzzer (off → quiet → on), four or more cycle message previews (shown → sender only → hidden, §8), each with a toast ("Buzzer: quiet", "Previews: hidden"). On other screens they act as a double click (Home). B counts its presses while each comes within 300 ms of the last, so its double click is reported once that window has passed; A's double click is still reported at once (it is "previous" everywhere).
 - Recognizer (`mc_ui::input`): 30 ms debounce; a click is reported once the 300 ms double-click window has passed; a long press is reported on release; while held, a tick every 250 ms from 1 s on. A released after it started repeating does not also open.
+- **While text is typed** (§7), B only deletes. Every short press is a click at its release: the recognizer neither waits for a double click nor counts presses (`Gestures::set_immediate_b`, set by the runner from `App::typing`), so quick presses delete that many characters, at once. A double click of B does not go Home there, since two quick deletes would throw the text away; presses that still arrive counted are taken as that many deletes, and stop with the press that cancels the entry.
+- **While a phone is pairing** the PIN covers the screen (§6): presses do nothing, except B's long press for the light.
 - Lists wrap: "next" on the last row goes to the first, "previous" on the first goes to the last.
 - **Hold-to-confirm** for dangerous or outgoing actions (factory reset, remove contact, flood advert, region change): a popup asks to hold A for 2 s and shows the time left; releasing early cancels.
 - The first press while the backlight has timed out only turns it back on (if it was on before).
@@ -85,7 +87,7 @@ Home (always-on face)
   - Discover (zero-hop discovery, SNR both ways, at most once every 5 s).
   - Trace route (per-hop SNR bars, both directions).
   - Ping & range test (success %, RTT, SNR sparkline).
-  - Signal (last RSSI/SNR, noise floor sparkline, packet rate).
+  - Signal (last RSSI/SNR, noise floor sparkline, packet rate). On the device, a `Radio` line counts what the chip itself received since boot: `412 ok, 15 bad`, readable packets and ones with a checksum or header error (something was on the air, too weak or too noisy to read).
   - Packet log (time, type, route, hops, SNR, summary).
   - Airtime (TX/RX time, regulatory duty-cycle gauge, queue).
   - Repeater admin (login as guest or with a password typed on the keyboard, status, neighbours strongest first), in the formats of MeshCore's `simple_repeater` v1.18.
@@ -104,12 +106,15 @@ Home (always-on face)
 - **Hibernate**: leaves a badge on the panel (name, my-card QR, "off — press B") and wakes on B.
 - **Timestamps are fixed** ("14:02", "yesterday") or whole minutes and more on the panel's lists and cards ("now", "5 min", "3 h", "2 d"), never seconds, so the clock alone never forces a redraw beyond its minute tick.
 - **First boot**: a setup flow (region, name, time from GPS or the app). It can be skipped, and it comes back from Settings → System.
+- **No time until the clock is set.** Until a clock chip, an app or the GPS gives the time, the header and Home show `--:--`, Home's date line reads `Clock not set`, and Settings → Time → Clock shows `--:--`. The node itself counts from its boot floor (`docs/spec/m5.md` §5), which is no time to show. Ages ("5 min") still work: they are differences.
+- **GPS state**: `GPS fix, 9 sats`; while searching `No fix, 4 sats` on Home and `Searching  4 satellites` in the GPS tool (satellites in use from the last GGA: an open sky reads differently from a room); `GPS off`. The tool's footer offers `hold: share` only on "Share this position", which is there only with a fix.
+- **Noise floor**: `-- dBm` until its first sampling round has ended (it reads 0 before).
 - **About** (Settings → System): name, key, firmware, radio settings, contacts and channels used, battery, uptime, messages waiting for the app. After the firmware line, the device's health (ADR-0013): `Started` with the reason of the last start (`power on`, `restart`, `woke up`, `after an error`, `watchdog`, `low voltage`, `USB reset`), always; then only when there is something to say, `Errors` (panics since the power came on, and the last one's file and line), `Radio` (`2 resets`, or `not answering`) and `Storage` (`3 write errors`).
 
 ## 7. Two-button text entry
 
 - Text at the top with the byte count and the 160-byte limit, live; below it what a long A can insert.
-- **Two levels.** The first is a ring of stops; a click moves to the next one, a double click to the previous one. A long A inserts a letter or a word, or opens a row. In an open row a click moves along it and a long A inserts, then the cursor is back on the first stop. B leaves an open row; otherwise B deletes the last character, and on an empty text it cancels.
+- **Two levels.** The first is a ring of stops; a click moves to the next one, a double click to the previous one. A long A inserts a letter or a word, or opens a row. In an open row a click moves along it and a long A inserts, then the cursor is back on the first stop. B leaves an open row; otherwise B deletes the last character, and on an empty text it cancels. Each press deletes at once, however fast they come (§3).
 - **The ring, in order:**
   - the quick replies (empty text only; in place of the text on the panel);
   - the 4 letters most likely to come next, best first;

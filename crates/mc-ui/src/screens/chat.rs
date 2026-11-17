@@ -975,4 +975,8 @@ impl Screen for Compose {
     fn keyboard(&self) -> Option<&Keyboard> {
         self.kb.as_ref()
     }
+
+    fn typing(&self) -> bool {
+        true
+    }
 }
