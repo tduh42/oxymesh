@@ -142,6 +142,7 @@ cargo run --release -p mc-cli -- telemetry <port> [0x00]     # telemetry permiss
 cargo run --release -p mc-cli -- tx-power <port> [dBm]       # transmit power, or set it
 cargo run --release -p mc-cli -- heard <port>                # when the device last heard its contacts, per hour (no names)
 scripts/firmware-ci.sh                                        # the firmware checks alone; scripts/size.sh after a release build
+scripts/release.sh [dir]                                      # every image (stripped ELFs), partition tables, SHA256SUMS, NOTES.md: what .github/workflows/release.yml publishes (main → `nightly` prerelease, a v* tag → release)
 FEATURES=debug-log OXYMESH_CRASH_TEST=panic scripts/flash.sh m5 <port>   # a build that panics once, 20 s after power-on (or =hang): proves the restart (ADR-0013)
 ```
 

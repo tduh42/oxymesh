@@ -12,3 +12,5 @@ node_modules/
 /.claude/
 # Images read from a device's C++ SPIFFS hold its private key.
 *.spiffs.bin
+# scripts/release.sh output
+/dist/
