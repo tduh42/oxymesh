@@ -1,6 +1,6 @@
 # oxymesh
 
-[![ci](https://github.com/tduhamel42/oxymesh/actions/workflows/ci.yml/badge.svg)](https://github.com/tduhamel42/oxymesh/actions/workflows/ci.yml)
+[![ci](https://github.com/tduh42/oxymesh/actions/workflows/ci.yml/badge.svg)](https://github.com/tduh42/oxymesh/actions/workflows/ci.yml)
 
 **MeshCore-compatible** firmware written in Rust, for the Elecrow **ThinkNode M5**
 (ESP32-S3, SX1262, 200×200 e-paper screen) and the **Heltec WiFi LoRa 32 V4** (ESP32-S3,
