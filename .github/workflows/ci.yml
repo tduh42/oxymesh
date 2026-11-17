@@ -26,6 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: esp-rs/xtensa-toolchain@v1.7.0
+        env:
+          # espup queries GitHub's API for the toolchain; unauthenticated, it hits the rate limit
+          # (the run of 2026-11-16 failed there).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           buildtargets: esp32s3
           version: 1.97.0.0
