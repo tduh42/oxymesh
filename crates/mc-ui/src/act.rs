@@ -92,6 +92,8 @@ pub enum Intent {
     CppImport,
     /// The screen's own settings.
     SetUi(UiPrefs),
+    /// Bluetooth on or off (`true`: off); the device restarts for it to apply (ADR-0014).
+    SetBluetooth(bool),
     /// Turn off until B is pressed.
     Hibernate,
 }
@@ -263,6 +265,13 @@ pub fn perform(
         Intent::SetUi(ui) => {
             dev.set_ui(*ui, st);
             Outcome::Ok
+        }
+        Intent::SetBluetooth(off) => {
+            let mut ui = dev.node.prefs.ui;
+            ui.bluetooth_off = *off;
+            dev.set_ui(ui, st);
+            dev.flush_contacts(st);
+            Outcome::Reboot
         }
         Intent::Hibernate => Outcome::Hibernate,
         Intent::SetupDone => {

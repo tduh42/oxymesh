@@ -301,6 +301,55 @@ fn spreading_factor_needs_hold_to_confirm() {
     );
 }
 
+/// Bluetooth off asks for a hold, saves the setting, and restarts the device so that the
+/// controller is not started at boot (ADR-0014); on again the same way.
+#[test]
+fn bluetooth_off_needs_a_hold_and_a_restart() {
+    let mut r = Rig::new(LARGE);
+    r.settings(2); // Bluetooth
+    assert!(
+        r.draw().contains("Bluetooth") && r.draw().contains("on"),
+        "{}",
+        r.draw()
+    );
+    r.press(&[Long(A)]);
+    assert!(r.app.popup().is_some(), "{}", r.draw());
+    assert!(
+        !r.w.nodes[ME].dev.node.prefs.ui.bluetooth_off,
+        "not before the hold"
+    );
+    // The runner gets the restart from `perform`; here the device just keeps the setting.
+    let c = ctx(&r.w);
+    r.app.gesture(Held(A, 1000), &c);
+    r.app.gesture(Held(A, CONFIRM_MS), &c);
+    let intents = r.app.take_intents();
+    assert_eq!(intents, vec![Intent::SetBluetooth(true)]);
+    let now = r.w.now;
+    let sn = &mut r.w.nodes[ME];
+    assert_eq!(
+        perform(&intents[0], &mut sn.dev, now, &mut r.rng, &mut sn.st),
+        Outcome::Reboot
+    );
+    assert!(sn.dev.node.prefs.ui.bluetooth_off);
+    let rec = sn.st.prefs.as_ref().expect("prefs saved");
+    assert!(mc_node::persist::bluetooth_off_in(rec), "boot finds it");
+    assert!(r.draw().contains("off"), "{}", r.draw());
+}
+
+/// A device that may sleep skips the interface's ticks only while nothing waits for one.
+#[test]
+fn the_app_is_at_rest_without_a_toast_or_a_running_test() {
+    let mut r = Rig::new(LARGE);
+    assert!(r.app.at_rest());
+    r.settings(1); // Identity
+    r.press(&[Click(A), Click(A), Long(A)]); // Share location: a toast
+    assert!(!r.app.at_rest(), "a toast clears on a tick");
+    r.w.run(Duration::from_secs(5));
+    let c = ctx(&r.w);
+    r.app.tick(&c);
+    assert!(r.app.at_rest());
+}
+
 #[test]
 fn text_size_switches_the_grid() {
     let mut r = Rig::new(LARGE);
@@ -324,7 +373,7 @@ fn toggles_flip_and_save() {
 fn fixed_pin_is_typed_with_digits() {
     let mut r = Rig::new(LARGE);
     r.settings(2); // Bluetooth
-    r.press(&[Click(A), Long(A)]); // Status, then PIN
+    r.press(&[Click(A), Click(A), Long(A)]); // Bluetooth, Status, then PIN
     r.draw();
     assert!(r.app.keyboard().is_some(), "{}", r.draw());
     for d in "246810".chars() {

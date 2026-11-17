@@ -307,6 +307,14 @@ impl<S: NorFlash> FlashStore<S> {
         self.saved_count = kept;
     }
 
+    /// "Bluetooth off" in the stored settings (ADR-0014), read before the controller would
+    /// start: one walk of the partition.
+    pub fn bluetooth_off(&mut self) -> bool {
+        let mut b = [0u8; PREFS_RECORD];
+        self.get(KEY_PREFS, &mut b)
+            .is_some_and(|n| mc_node::persist::bluetooth_off_in(&b[..n]))
+    }
+
     /// Stored bonds, most recent first. An unreadable list is forgotten.
     pub fn bonds(&mut self) -> heapless::Vec<BondInformation, BONDS_MAX> {
         let mut raw = [0u8; BONDS_MAX * BOND_LEN];

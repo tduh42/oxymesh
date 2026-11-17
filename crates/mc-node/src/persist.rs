@@ -150,9 +150,20 @@ pub fn encode_prefs(p: &Prefs) -> [u8; PREFS_RECORD] {
         // Inverted, so that the zero bytes of older records read as the defaults (both on).
         w.put_u8(u8::from(!p.rx_boosted_gain) | (u8::from(!p.fem_rxgain) << 1))?;
         // Message previews; 0 (older records) is "shown".
-        w.put_u8(u.previews.to_u8())
+        w.put_u8(u.previews.to_u8())?;
+        // Bluetooth off (ADR-0014); 0 (older records) is on. At `BLUETOOTH_OFF_AT`.
+        w.put_u8(u8::from(u.bluetooth_off))
     })();
     out
+}
+
+/// Where a settings record keeps "Bluetooth off".
+pub const BLUETOOTH_OFF_AT: usize = 146;
+
+/// Whether a stored settings record turns Bluetooth off, read before anything else at boot:
+/// the Bluetooth controller starts (or not) before the settings are loaded (ADR-0014).
+pub fn bluetooth_off_in(record: &[u8]) -> bool {
+    record.len() >= PREFS_RECORD_V1 && record.get(BLUETOOTH_OFF_AT).is_some_and(|b| b & 1 != 0)
 }
 
 /// Reads settings back; `None` if the version is unknown (factory settings are then kept).
@@ -232,6 +243,9 @@ pub fn decode_prefs(b: &[u8], defaults: &Prefs) -> Option<Prefs> {
         if let Ok(v) = r.u8() {
             p.ui.previews = crate::node::Previews::from_u8(v);
         }
+        if let Ok(v) = r.u8() {
+            p.ui.bluetooth_off = v & 1 != 0;
+        }
     }
     Some(p)
 }
@@ -301,6 +315,18 @@ mod tests {
             decode_prefs(&before, &p).unwrap().ui.previews,
             crate::node::Previews::Shown
         );
+        // Bluetooth off: kept, found where boot looks for it, and on in older records.
+        let mut off = q.clone();
+        off.ui.bluetooth_off = true;
+        let rec = encode_prefs(&off);
+        assert!(decode_prefs(&rec, &p).unwrap().ui.bluetooth_off);
+        assert!(bluetooth_off_in(&rec));
+        assert!(!bluetooth_off_in(&encode_prefs(&q)));
+        let mut older = rec;
+        older[BLUETOOTH_OFF_AT] = 0;
+        assert!(!decode_prefs(&older, &p).unwrap().ui.bluetooth_off);
+        assert!(!bluetooth_off_in(&older));
+        assert!(!bluetooth_off_in(&rec[..100]), "too short to be a record");
         assert!(back.rx_boosted_gain && !back.fem_rxgain);
         assert_eq!((back.gps_interval, back.agc_reset_interval), (600, 15));
     }

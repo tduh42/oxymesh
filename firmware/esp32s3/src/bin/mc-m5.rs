@@ -58,6 +58,7 @@ use oxymesh_esp32s3::pca9557::{Pca9557, pin};
 use oxymesh_esp32s3::pcf8563::Pcf8563;
 use oxymesh_esp32s3::run::link::AppLink;
 use oxymesh_esp32s3::run::radio::{Chip, Companion, NoFrontEnd, Radio, Tx};
+use oxymesh_esp32s3::run::sleep::{self, Saver};
 use oxymesh_esp32s3::run::{self, BOOT_EPOCH, Deadline, boot, crash, mc_now};
 use oxymesh_esp32s3::ssd1681::{Frame, Ssd1681};
 use oxymesh_esp32s3::sx126x::Sx126x;
@@ -86,6 +87,11 @@ const HEAP_SIZE: usize = 24 * 1024;
 const HEAP_RECLAIMED: usize = 72 * 1024;
 /// How often screens get their tick (range test pings, toasts).
 const UI_TICK_MS: u64 = 250;
+/// A tune asked of the buzzer plays for at most this long: no light sleep until it is over.
+const TUNE_MS: u64 = 5_000;
+/// Test builds only (`OXYMESH_SLEEP_ON_USB=1`): sleep on USB power too, to watch the sleep with
+/// `mc log`. The first bytes from the computer after a sleep are then lost.
+const SLEEP_ON_USB: bool = option_env!("OXYMESH_SLEEP_ON_USB").is_some();
 /// The unread LED blinks this often, this long.
 const BLINK_EVERY_MS: u64 = 5_000;
 const BLINK_MS: u64 = 80;
@@ -339,11 +345,11 @@ async fn main(_spawner: Spawner) -> ! {
     #[cfg(feature = "debug-log")]
     diag::paint();
     crash::note();
-    let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    let mut p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     // From here on a loop that stops turning restarts the chip (ADR-0013).
     let mut watchdog = crash::Watchdog::start(p.RTC_TIMER);
     let last_panic = crash::last_panic();
-    let lpwr = p.LPWR;
+    let mut low = LowPower::new(p.LPWR);
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
     info!("oxymesh mc-m5: companion over Bluetooth and USB, with its interface");
@@ -353,7 +359,6 @@ async fn main(_spawner: Spawner) -> ! {
     let ble_config = esp_radio::ble::Config::default()
         .with_max_connections(2)
         .with_scan_duplicate_list_count(10);
-    let connector = BleConnector::new(p.BT, ble_config).ok();
 
     let out = OutputConfig::default();
     let _lora_en = Output::new(p.GPIO46, Level::High, out);
@@ -433,6 +438,17 @@ async fn main(_spawner: Spawner) -> ! {
     let mut store = boot::open_store(&flash, data_part);
     let cpp_fs = || boot::cpp_fs(&flash, cpp_part);
 
+    // Bluetooth, unless the settings turn it off (ADR-0014). Its radio also feeds the hardware
+    // RNG with entropy; without it the ADC does, until the identity and the seed are drawn.
+    let bluetooth_off = store.bluetooth_off();
+    let connector = if bluetooth_off {
+        info!("bluetooth: off (settings)");
+        None
+    } else {
+        BleConnector::new(p.BT, ble_config).ok()
+    };
+    let trng =
+        bluetooth_off.then(|| esp_hal::rng::TrngSource::new(p.RNG.reborrow(), p.ADC1.reborrow()));
     let hw = esp_hal::rng::Rng::new();
     let mut rng =
         ChaCha20Rng::seed_from_u64((u64::from(hw.random()) << 32) | u64::from(hw.random()));
@@ -460,6 +476,8 @@ async fn main(_spawner: Spawner) -> ! {
     let ble_name = boot::ble_name(&dev.node.prefs, mac);
     let ble_sh = Shared::new();
     ble_sh.pin.set(boot::pin_of(dev.node.prefs.ble_pin, &hw));
+    // The ADC goes back to the battery.
+    drop(trng);
     let bonds = store.bonds();
     ble_sh.paired.set(bonds.len() as u8);
 
@@ -566,6 +584,10 @@ async fn main(_spawner: Spawner) -> ! {
     let mut last_ble = ble_of(&ble_sh);
     // Until then, the buttons are sampled every 10 ms after an edge (debounce).
     let mut buttons_settle = 0u64;
+    // Light sleep with Bluetooth off (ADR-0014): when the device was last used, and until when
+    // a tune plays.
+    let mut saver = Saver::new();
+    let mut tune_until = 0u64;
     // The loop owns the device and its peripherals; the Bluetooth side only shares `ble_sh`,
     // the buzzer only its requests.
     let ble_sh = &ble_sh;
@@ -794,9 +816,11 @@ async fn main(_spawner: Spawner) -> ! {
                     app.event(e, &c);
                     if let Some(a) = mc_ui::tune::alert(e, dev, phone) {
                         buzz.signal(a);
+                        tune_until = now_ms + TUNE_MS;
                     }
                 }
                 while let Some(g) = gestures.poll(now_ms) {
+                    saver.used(now_ms);
                     policy.input(now_ms);
                     let timeout = u64::from(dev.node.prefs.ui.light_timeout_s) * 1000;
                     if dimmed {
@@ -908,7 +932,7 @@ async fn main(_spawner: Spawner) -> ! {
                         let _ = btn_b.apply_wakeup_config(
                             &WakeupConfig::default().with_low_power_path(true),
                         );
-                        LowPower::new(lpwr).sleep_deep(RtcSleepConfig::deep());
+                        low.sleep_deep(RtcSleepConfig::deep());
                     }
                     _ => {}
                 }
@@ -1054,6 +1078,50 @@ async fn main(_spawner: Spawner) -> ! {
             if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
                 // UART1 at 9600 baud: its 128-byte FIFO fills in about 130 ms.
                 due.at_ms(now_ms + 50);
+            }
+            // Bluetooth off and on battery: light sleep between events, as a repeater with
+            // `powersaving on` (ADR-0014). Awake with the light on, while something is drawn,
+            // sent, played, blinked or ticking, with the GPS on, and a minute after a button.
+            let at_rest = bluetooth_off
+                && (usb_in.is_low() || SLEEP_ON_USB)
+                && !light
+                && !want_draw
+                && !epd.busy()
+                && !radio.transmitting()
+                && dev.node.next_wakeup().is_none()
+                && !gps_rx.as_ref().is_some_and(|g| g.is_on())
+                && now_ms >= tune_until
+                && blink_off.is_none()
+                && app.at_rest()
+                && now_ms >= buttons_settle
+                && gestures.next_deadline().is_none()
+                && btn_a.is_high()
+                && btn_b.is_high();
+            if at_rest && saver.may_sleep(true, false, now_ms) {
+                let mut until = Deadline::within(sleep::SLEEP_MAX);
+                until.at_mc(dev.next_wakeup());
+                until.at(next_battery);
+                // Home's clock: its next minute.
+                let unix = dev.node.rtc.now(mc_now());
+                until.at_ms(now_ms + u64::from(60 - unix % 60) * 1000);
+                if dev.node.prefs.ui.led_unread && dev.unread_alerting() > 0 {
+                    until.at_ms(next_blink);
+                }
+                let person = saver.sleep(
+                    &mut low,
+                    until.get(),
+                    radio.irq_pin(),
+                    &mut [
+                        (&mut btn_a, PinEvent::LowLevel),
+                        (&mut btn_b, PinEvent::LowLevel),
+                    ],
+                );
+                if person {
+                    let t = Instant::now().as_millis();
+                    saver.used(t);
+                    buttons_settle = t + 60;
+                }
+                continue;
             }
             let deadline = due.get();
             if deadline <= Instant::now() {
