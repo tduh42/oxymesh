@@ -2,6 +2,19 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-17 — Bluetooth off and the companion's light sleep (ADR-0014)
+
+- Setup: the M5 on USB, 130 contacts, the phone app paired; `debug-log` builds read with `mc log`.
+- **Bluetooth on**, after the boot-order change: the M5 advertises (`mc ble-scan`: `MeshCore-2E97BC45`, −50 dBm), the phone app connects, USB answers.
+- **Bluetooth off**, set on the device (Settings → Bluetooth, hold): it restarted (reset reason 0x03), two full scans (128 and 117 devices) did not find it, USB answered; set on again the same way, the phone reconnected.
+- **Light sleep**, build with `OXYMESH_SLEEP_ON_USB=1` (it sleeps on USB power too):
+  - With the GPS enabled it never slept, by design: the GPS is read every 50 ms. Its hardware switch was off, so it received nothing.
+  - GPS off (`mc var gps:0`): from about 2 minutes after boot, a sleep of 9.94 s every 10 s, woken by the battery reading: **1 loop pass per 10 s instead of 205, busy 0.6 %**.
+  - Woken by a packet (DIO1) once in 8 minutes at the desk.
+  - Woken by the top button: the press counted (`Click(B)`), then awake for a minute (46 passes per 10 s, GPS off).
+  - GPS set back on afterwards.
+- Current not measured (no meter): the battery runs should compare Bluetooth on and off.
+
 ## 2026-11-17 — restarts (ADR-0013), boot time, port opening
 
 - Setup: the M5 on USB (`/dev/cu.wchusbserial210`), `debug-log` builds read with `mc log` (which does not reset it); 130 contacts stored.

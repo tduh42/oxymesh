@@ -600,6 +600,9 @@ async fn main(_spawner: Spawner) -> ! {
         let mut power = diag::Power::new();
         #[cfg(feature = "debug-log")]
         let mut crash_test: Option<u64> = None;
+        // Light sleeps (ADR-0014): how many, ms asleep, woken by a person, woken by a packet.
+        #[cfg(feature = "debug-log")]
+        let mut sleeps = (0u32, 0u64, 0u32, 0u32);
         loop {
             watchdog.feed();
             #[cfg(feature = "debug-log")]
@@ -744,13 +747,18 @@ async fn main(_spawner: Spawner) -> ! {
                     );
                     let h = radio.health();
                     info!(
-                        "health: started {}; panics {:?}; radio recoveries {} failures {} down {}; store errors {}",
+                        "health: started {}; panics {:?}; radio recoveries {} failures {} down {}; store errors {}; bluetooth {}; sleeps {} ({} ms, {} by a button, {} by a packet)",
                         crash::restart(),
                         last_panic.as_ref().map(|p| (p.count, p.file(), p.line)),
                         h.recoveries,
                         h.failures,
                         h.down,
-                        store.errors
+                        store.errors,
+                        if bluetooth_off { "off" } else { "on" },
+                        sleeps.0,
+                        sleeps.1,
+                        sleeps.2,
+                        sleeps.3
                     );
                 }
                 let raw_mv = adc.read_blocking(&mut bat_pin);
@@ -1107,6 +1115,8 @@ async fn main(_spawner: Spawner) -> ! {
                 if dev.node.prefs.ui.led_unread && dev.unread_alerting() > 0 {
                     until.at_ms(next_blink);
                 }
+                #[cfg(feature = "debug-log")]
+                let slept_from = Instant::now();
                 let person = saver.sleep(
                     &mut low,
                     until.get(),
@@ -1116,6 +1126,16 @@ async fn main(_spawner: Spawner) -> ! {
                         (&mut btn_b, PinEvent::LowLevel),
                     ],
                 );
+                #[cfg(feature = "debug-log")]
+                {
+                    sleeps.0 += 1;
+                    sleeps.1 += slept_from.elapsed().as_millis();
+                    if person {
+                        sleeps.2 += 1;
+                    } else if radio.irq_pin().is_high() {
+                        sleeps.3 += 1;
+                    }
+                }
                 if person {
                     let t = Instant::now().as_millis();
                     saver.used(t);
