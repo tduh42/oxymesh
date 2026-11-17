@@ -1,5 +1,4 @@
-//! Screens that show information: About, the QR cards, and a fallback for a settings page that
-//! cannot open.
+//! Screens that show information: About, the QR cards, the import from the C++ firmware.
 
 use alloc::format;
 use alloc::string::String;
@@ -54,74 +53,86 @@ impl Screen for About {
     }
 
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
-        let c = ui.ctx;
-        let dev = c.dev;
-        let p = &dev.node.prefs;
-        let r = &p.radio;
         let w = usize::from(body.width);
-        let channels = dev.node.channels.0.iter().filter(|c| !c.is_empty()).count();
-        let up = c.now_ms / 1000;
-        let volts = if dev.battery_mv == 0 {
-            String::from("--")
-        } else {
-            format!(
-                "{}.{:02} V",
-                dev.battery_mv / 1000,
-                dev.battery_mv % 1000 / 10
-            )
-        };
-        let battery = match c.battery_percent {
-            Some(pc) => format!("{volts} {pc}%"),
-            None => volts,
-        };
-        let mut pairs: Vec<(&str, String)> = alloc::vec![
-            ("Name", name_of(&p.name)),
-            ("Key", short_key(dev.node.id.pub_key())),
-            ("Firmware", String::from(dev.info.version)),
-        ];
-        pairs.extend(health_lines(&c.health));
-        pairs.extend([
-            (
-                "Frequency",
-                format!("{}.{:03} MHz", r.freq_khz / 1000, r.freq_khz % 1000),
-            ),
-            (
-                "Modulation",
-                format!(
-                    "SF{} BW{}.{} CR4/{}",
-                    r.sf,
-                    r.bw_hz / 1000,
-                    r.bw_hz % 1000 / 100,
-                    r.cr
-                ),
-            ),
-            ("Power", format!("{} dBm", r.tx_power_dbm)),
-            (
-                "Contacts",
-                format!(
-                    "{}/{}",
-                    dev.node.contacts.list.len(),
-                    mc_node::contacts::MAX_CONTACTS
-                ),
-            ),
-            (
-                "Channels",
-                format!("{channels}/{}", mc_node::contacts::MAX_CHANNELS),
-            ),
-            ("Battery", battery),
-            ("Uptime", format!("{} h {:02} min", up / 3600, up / 60 % 60)),
-            ("For the app", format!("{} queued", dev.queued_messages())),
-        ]);
-        let lines: Vec<Line<'_>> = pairs
+        let lines: Vec<Line<'_>> = about_rows(ui)
             .iter()
             .map(|(k, v)| Line::from(chrome::spread(k, v, w)))
             .collect();
         f.render_widget(Paragraph::new(lines), body);
     }
 
+    /// On the panel: the same rows as labelled values.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<crate::scene::Scene> {
+        let mut sc = crate::scene::Scene::new();
+        super::pixel::fields(&mut sc, w, 0, &about_rows(ui));
+        Some(sc)
+    }
+
     fn footer(&self, _ui: &Ui<'_>) -> Footer {
         Footer::BACK
     }
+}
+
+/// What About shows: who this is, its health, the radio, what it holds.
+fn about_rows(ui: &Ui<'_>) -> Vec<(&'static str, String)> {
+    let c = ui.ctx;
+    let dev = c.dev;
+    let p = &dev.node.prefs;
+    let r = &p.radio;
+    let channels = dev.node.channels.0.iter().filter(|c| !c.is_empty()).count();
+    let up = c.now_ms / 1000;
+    let volts = if dev.battery_mv == 0 {
+        String::from("--")
+    } else {
+        format!(
+            "{}.{:02} V",
+            dev.battery_mv / 1000,
+            dev.battery_mv % 1000 / 10
+        )
+    };
+    let battery = match c.battery_percent {
+        Some(pc) => format!("{volts} {pc}%"),
+        None => volts,
+    };
+    let mut pairs: Vec<(&str, String)> = alloc::vec![
+        ("Name", name_of(&p.name)),
+        ("Key", short_key(dev.node.id.pub_key())),
+        ("Firmware", String::from(dev.info.version)),
+    ];
+    pairs.extend(health_lines(&c.health));
+    pairs.extend([
+        (
+            "Frequency",
+            format!("{}.{:03} MHz", r.freq_khz / 1000, r.freq_khz % 1000),
+        ),
+        (
+            "Modulation",
+            format!(
+                "SF{} BW{}.{} CR4/{}",
+                r.sf,
+                r.bw_hz / 1000,
+                r.bw_hz % 1000 / 100,
+                r.cr
+            ),
+        ),
+        ("Power", format!("{} dBm", r.tx_power_dbm)),
+        (
+            "Contacts",
+            format!(
+                "{}/{}",
+                dev.node.contacts.list.len(),
+                mc_node::contacts::MAX_CONTACTS
+            ),
+        ),
+        (
+            "Channels",
+            format!("{channels}/{}", mc_node::contacts::MAX_CHANNELS),
+        ),
+        ("Battery", battery),
+        ("Uptime", format!("{} h {:02} min", up / 3600, up / 60 % 60)),
+        ("For the app", format!("{} queued", dev.queued_messages())),
+    ]);
+    pairs
 }
 
 /// A contact card as a QR the official app scans: ours (Identity → My card) or a contact's.

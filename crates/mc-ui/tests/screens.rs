@@ -605,7 +605,7 @@ fn draw_panel(app: &mut App, grid: Grid, c: &Ctx<'_>) {
 fn main_screens_draw_their_body_in_pixels() {
     let w = world();
     let c = ctx(&w);
-    let cases: [(&[Gesture], &[&str]); 10] = [
+    let cases: [(&[Gesture], &[&str]); 14] = [
         (
             &[],
             &["Messages", "Contacts", "Map", "Bob", "Coffee at the refuge"],
@@ -626,6 +626,64 @@ fn main_screens_draw_their_body_in_pixels() {
         (
             &[Double(A), Long(A)],
             &["Radio", "SF", "Identity", "Morgan", "Bluetooth", "Display"],
+        ),
+        // About, as labelled values.
+        (
+            &[Double(A), Long(A), Double(A), Long(A), Long(A)],
+            &[
+                "Name",
+                "Firmware",
+                "Frequency",
+                "869.618 MHz",
+                "Contacts",
+                "Uptime",
+            ],
+        ),
+        // Tools: heard nodes, Signal, the packet log, Airtime.
+        (
+            &[Click(A), Click(A), Click(A), Long(A), Long(A)],
+            &["Bob", "Alice", "direct"],
+        ),
+        (
+            &[
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+            ],
+            &[
+                "Last",
+                "Noise floor",
+                "Packets",
+                "Noise floor, last hour",
+                "Packets a minute",
+            ],
+        ),
+        (
+            &[
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+            ],
+            &[
+                "TX total",
+                "Sent / received",
+                "2/5",
+                "Duty 0.00% of 10.0% (g3)",
+            ],
         ),
         // A settings page (no icons), and a picker.
         (
@@ -672,12 +730,12 @@ fn main_screens_draw_their_body_in_pixels() {
                 );
             }
         }
-        // A tool page stays text: Tools → Heard nodes.
+        // A tool page that stays text: Tools → Discover.
         let mut app = App::new(grid, true);
         press(
             &mut app,
             &c,
-            &[Click(A), Click(A), Click(A), Long(A), Long(A)],
+            &[Click(A), Click(A), Click(A), Long(A), Click(A), Long(A)],
         );
         draw_panel(&mut app, grid, &c);
         assert!(body_overlays(&app).is_empty());
@@ -901,10 +959,13 @@ fn the_banner_is_a_card_over_the_faded_screen() {
         outgoing: false,
     };
     for grid in [LARGE, COMPACT] {
-        // Over Home (pixels), and over a tool page (text): Tools → Heard nodes.
+        // Over Home (pixels), and over a tool page that stays text: Tools → Discover.
         for (gestures, under) in [
             (&[][..], 1),
-            (&[Click(A), Click(A), Click(A), Long(A), Long(A)][..], 0),
+            (
+                &[Click(A), Click(A), Click(A), Long(A), Click(A), Long(A)][..],
+                0,
+            ),
         ] {
             let mut app = App::new(grid, true);
             press(&mut app, &c, gestures);
