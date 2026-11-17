@@ -310,6 +310,8 @@ async fn pump(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPo
                     .next_notify(Instant::now().as_millis(), &mut buf);
                 if let Some(n) = n {
                     let _ = tx.notify_raw(conn, &buf[..n], true).await;
+                    // A slot is free: the main loop may have frames waiting for it.
+                    sh.wake.signal(());
                 }
             }
         }

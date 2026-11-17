@@ -126,7 +126,21 @@ impl<W: Wire> AppLink<W> {
             let Some(n) = n else { break };
             dev.on_app_frame(now, &self.frame_in[..n], rng, st);
         }
-        while let Some(f) = dev.poll_app() {
+        // A phone's Bluetooth queue sets the pace: no frame while it is full (none is dropped),
+        // and the next contact of a list only once it is empty (`BleLink::ready`). The frames
+        // wait in the device; `ble::pump` wakes the loop as it frees a slot.
+        loop {
+            let (any, contact) = {
+                let l = ble.link.borrow();
+                let ms = now.as_nanos() / 1_000_000;
+                (l.ready(false, ms), l.ready(true, ms))
+            };
+            if !any {
+                break;
+            }
+            let Some(f) = dev.poll_app(contact) else {
+                break;
+            };
             if ble.link.borrow_mut().send(&f) {
                 ble.outbound.signal(());
             }

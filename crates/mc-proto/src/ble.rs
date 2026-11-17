@@ -11,6 +11,9 @@ use crate::codec::FRAME_MAX;
 pub const QUEUE: usize = 4;
 /// Minimum time between two notifications (`BLE_WRITE_MIN_INTERVAL`, BLE:181).
 pub const NOTIFY_GAP_MS: u64 = 60;
+/// A queue with frames and no notification for this long is stalled: frames are then handed
+/// over (and dropped when the queue is full) as in the C++, so that USB is not held back.
+pub const STALL_MS: u64 = 2_000;
 /// Advertising restarts this long after a disconnection or a failed pairing (BLE:11).
 pub const ADVERT_RESTART_MS: u64 = 1000;
 /// Prefix of the advertised name (`BLE_NAME_PREFIX`).
@@ -147,6 +150,28 @@ impl BleLink {
     /// Frames waiting to be notified.
     pub fn pending(&self) -> usize {
         self.outbound.len
+    }
+
+    /// Whether the runner may hand this link another frame at `now_ms`
+    /// (`docs/spec/companion.md` §1.1): with a phone connected, `contact` frames (a
+    /// GET_CONTACTS list) only once the queue is empty, as the C++ paces them (`isWriteBusy`,
+    /// BLE:191-193), and any frame only while the queue has room, so that none is dropped
+    /// (deviation 13). Without a phone, or with the queue stalled for [`STALL_MS`], always:
+    /// frames then go to USB, and Bluetooth drops what does not fit, as the C++.
+    pub fn ready(&self, contact: bool, now_ms: u64) -> bool {
+        if !self.authenticated {
+            return true;
+        }
+        let stalled =
+            self.outbound.len > 0 && now_ms >= self.last_notify_ms.unwrap_or(0) + STALL_MS;
+        if stalled {
+            return true;
+        }
+        if contact {
+            self.outbound.len == 0
+        } else {
+            self.outbound.len < QUEUE
+        }
     }
 
     /// When the next notification may go out, if one is waiting.

@@ -422,11 +422,17 @@ impl Device {
         .min()
     }
 
-    /// Next frame to the app. The contacts of a `GET_CONTACTS` come out one by one, when the
-    /// queue is empty (`checkSerialInterface`).
-    pub fn poll_app(&mut self) -> Option<Frame> {
+    /// Next frame to the app. Replies and pushes come out as queued. The contacts of a
+    /// `GET_CONTACTS` (and its END_OF_CONTACTS) come out one by one, when the queue is empty and
+    /// `contacts` says the link can take one: the runner passes false while a phone's
+    /// Bluetooth queue still holds a frame, as the C++ waits for `!isWriteBusy()`
+    /// (`checkSerialInterface`, M:2388-2413).
+    pub fn poll_app(&mut self, contacts: bool) -> Option<Frame> {
         if let Some(f) = self.out.pop_front() {
             return Some(f);
+        }
+        if !contacts {
+            return None;
         }
         let mut it = self.iter?;
         let list = &self.node.contacts.list;
