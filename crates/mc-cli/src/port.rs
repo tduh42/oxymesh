@@ -145,6 +145,9 @@ impl Port {
                     self.name
                 ));
             }
+            if crate::stop::requested() {
+                return Err(format!("{}: interrupted", self.name));
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -168,9 +171,39 @@ impl Port {
             if Instant::now() >= end {
                 return Err(format!("{}: no response to {cmd}", self.name));
             }
+            if crate::stop::requested() {
+                return Err(format!("{}: interrupted", self.name));
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+
+    /// [`Port::ask`], where a refusal is a failure: an ERR reply names its code instead of
+    /// passing for an answer (a device refuses a time before its own clock's, for one).
+    pub fn ask_ok(&mut self, cmd: &Command<'_>) -> Result<Vec<u8>, String> {
+        let f = self.ask(cmd)?;
+        match refusal(&f) {
+            Some(why) => Err(format!("{}: {cmd} refused: {why}", self.name)),
+            None => Ok(f),
+        }
+    }
+}
+
+/// Why the device refused, when `frame` is an ERR reply (`docs/spec/companion.md` §4).
+fn refusal(frame: &[u8]) -> Option<String> {
+    let Ok(Response::Err(code)) = Response::decode(frame) else {
+        return None;
+    };
+    let name = match code {
+        mc_proto::err::UNSUPPORTED => "unsupported command",
+        mc_proto::err::NOT_FOUND => "not found",
+        mc_proto::err::TABLE_FULL => "table full",
+        mc_proto::err::BAD_STATE => "bad state",
+        mc_proto::err::FILE_IO => "storage error",
+        mc_proto::err::ILLEGAL_ARG => "illegal argument",
+        _ => "unknown code",
+    };
+    Some(format!("ERR {code} ({name})"))
 }
 
 pub fn now_unix() -> u32 {
@@ -178,4 +211,26 @@ pub fn now_unix() -> u32 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as u32)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_err_reply_is_a_refusal_and_names_its_code() {
+        let mut buf = [0u8; 8];
+        let n = Response::Err(mc_proto::err::ILLEGAL_ARG)
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(
+            refusal(&buf[..n]).as_deref(),
+            Some("ERR 6 (illegal argument)")
+        );
+        let n = Response::Ok.encode(&mut buf).unwrap();
+        assert_eq!(refusal(&buf[..n]), None);
+        let n = Response::Err(99).encode(&mut buf).unwrap();
+        assert_eq!(refusal(&buf[..n]).as_deref(), Some("ERR 99 (unknown code)"));
+        assert_eq!(refusal(&[]), None);
+    }
 }

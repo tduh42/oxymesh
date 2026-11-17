@@ -32,6 +32,8 @@ btleplug = "0.13"
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 futures = "0.3"
 uuid = "1"
+# Ctrl-C during `mc soak` and `mc duo`: they put the devices' settings back first.
+signal-hook = "0.3"
 
 [lints]
 workspace = true
