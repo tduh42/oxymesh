@@ -38,6 +38,6 @@ On the M5 the e-paper keeps its last image, so a dead device looks alive and jus
 - A fault costs a restart of a few seconds instead of a dead device. Messages waiting for the app, contacts and history are in flash and survive it; what was heard in RAM (heard nodes, packet log, statistics) starts over.
 - A fault that repeats at every boot becomes a restart loop. The record keeps its place, and `mc log` on a `debug-log` build shows it.
 - Nothing changes on the air or for the app. The new error flag is the C++'s own.
-- A pass that legitimately takes more than 30 s would now restart the device. None does today; anything new that long must feed the watchdog or stop it.
+- A pass that legitimately takes more than 30 s would now restart the device. None does today; anything new that long must feed the watchdog or stop it. Boot's storage steps (identity, import from the C++ at first boot, loading the store) run with the watchdog stopped: the first try on the M5 found a load of 18 s with 130 contacts, so a full contact table would have restarted the device before its first pass (now one pass over the storage, 270 ms, `docs/measurements.md` 2026-11-17).
 - Rejected: `esp-backtrace`'s `halt-cores` or `custom-halt`. They cannot see the panic's location, and a halt is what we are leaving.
 - Rejected: the timer-group watchdogs. They stop with the main clocks; the RTC watchdog also covers a hang with interrupts off.

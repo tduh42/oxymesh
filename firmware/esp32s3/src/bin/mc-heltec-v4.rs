@@ -156,11 +156,15 @@ async fn main(_spawner: Spawner) -> ! {
     let hw = esp_hal::rng::Rng::new();
     let mut rng =
         ChaCha20Rng::seed_from_u64((u64::from(hw.random()) << 32) | u64::from(hw.random()));
+    // Storage at boot has no fixed bound (a first boot imports the C++ firmware's data): the
+    // watchdog waits for the main loop (ADR-0013).
+    watchdog.stop();
     let id = boot::identity(&mut store, cpp_fs, &hw);
     let prefs = Prefs::defaults(id.pub_key());
     let dev = DEVICE.take();
     dev.node.reset(id, prefs, BOOT_EPOCH, mc_now());
     store.load(dev);
+    watchdog.resume();
     dev.connected = true; // USB: always connected.
 
     // Front end, then radio.
