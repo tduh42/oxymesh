@@ -76,7 +76,7 @@ fuzz_target!(|data: &[u8]| {
     let mut rng = ChaCha20Rng::seed_from_u64(1);
     dev.on_app_frame(now, &frame, &mut rng, &mut Null);
     let mut replies = 0;
-    while let Some(f) = dev.poll_app() {
+    while let Some(f) = dev.poll_app(true) {
         assert!(f.len() <= FRAME_MAX);
         if matches!(Response::decode(&f), Ok(Response::CliReply { .. })) {
             replies += 1;
