@@ -15,7 +15,7 @@ SX1262 with an amplifier, 128×64 OLED).
 **Status: experimental.**
 - It runs on a ThinkNode M5 (board v1.0) and has been checked against MeshCore C++ v1.18, over the air and with the app ([`docs/measurements.md`](docs/measurements.md)).
 - The 24-hour endurance run on a live network is still to do.
-- The Heltec V4 (V4.3) runs too: import from the C++, amplifier, screen and button checked on the board.
+- The Heltec V4 (V4.3) runs too: import from the C++, amplifier, screen and button checked on the board (last run on 2026-11-10; its builds since then are compiled and linted, not run).
 - The repeater and room server are new. A first round on the M5 against a C++ companion passed (logins, status, telemetry, posts pushed and acknowledged). Nothing long-running yet.
 
 ## Getting started
@@ -53,7 +53,8 @@ On Linux, `mc` needs the D-Bus headers for its Bluetooth client (`libdbus-1-dev`
 
 **Going back to the C++ firmware.**
 - Flash the official MeshCore release for the board.
-- oxymesh never writes the C++ firmware's storage, so its data is still there. This is how it is designed ([ADR-0006](docs/decisions/0006-partitions-and-migration.md)). The full round trip has not been tested yet.
+- oxymesh never writes the C++ firmware's storage, so its data is still there ([ADR-0006](docs/decisions/0006-partitions-and-migration.md)).
+- Done once on an M5 (2026-11-15): the C++ companion ran on it, then oxymesh flashed back found its own data intact. Whether the C++ found its contacts exactly as left was not checked.
 
 ## Documentation
 
@@ -104,6 +105,9 @@ The reference is the original MeshCore v1.18 companion firmware on the same M5.
   - The 256 messages waiting for the app are kept in flash; the C++ keeps them in RAM and loses them when it restarts.
   - The device also keeps its own history of the last 200 messages, with unread state shared with the app: what you read on the screen or the app counts as read on both.
 - **Retries for messages written on the device.** Three direct tries, then a reset of the route and a flood, as the app does for its own messages.
+- **Message previews.** Settings → Notifications → Previews: shown, sender only, or hidden. Hidden keeps message text (and the sender) off Home, the lists and the new-message card; a lock in the header says so. On Home, three quick presses of the top button cycle the buzzer, four cycle the previews.
+- **It does not stay dead.** A crash or a stuck main loop restarts the device (watchdog), and the radio chip is reset when it stops listening. About says why the device last started. When its radio stops listening, the C++ only raises an error flag ([ADR-0013](docs/decisions/0013-restart-instead-of-dying.md)).
+- **The clock does not pretend.** Until a clock chip, an app or the GPS gives the time, the screens show `--:--` and "Clock not set" rather than a made-up date.
 - **USB and Bluetooth at the same time.** The C++ M5 build has Bluetooth only. A cable on the USB port works as a second app link.
 - **A new Bluetooth PIN applies at once.** The C++ waits for a reboot.
 - **Hibernation wakes up on the top button.** The C++ hibernates with no way to wake but a reset.
@@ -115,6 +119,8 @@ The reference is the original MeshCore v1.18 companion firmware on the same M5.
   - `mc duo`, `mc airtest`, `mc burst`: radio tests against a C++ node;
   - `mc spiffs`: what the C++ left on a flash image;
   - `mc var`: read or set the device's custom variables;
+  - `mc soak`: long runs against a C++ node (adverts, acknowledged messages, pings, restarts counted);
+  - `mc time`, `mc telemetry`, `mc tx-power`, `mc stats`, `mc heard`, `mc log`: set the clock, read or set a setting, read counters, follow a `debug-log` build without resetting it;
   - a Bluetooth client (`ble:<name>` ports).
 
 ### Not there yet
@@ -144,7 +150,7 @@ What Rust does change is **robustness**:
 - **Time and randomness are passed in.** That lets whole meshes run in a simulator on a laptop.
 - **The same interface code** runs on the e-paper, in a terminal, and in snapshot tests of every screen.
 
-The cost is size. The image is 1.31 MB of the 1.75 MB app partition; Bluetooth is about 300 KB of it, the new interface much of the rest. The C++ image size has not been measured here.
+The cost is size. The image is about 1.52 MB of the 1.75 MB app partition (82 %; CI fails above 90 %); Bluetooth is about 300 KB of it, the new interface much of the rest. The C++ image size has not been measured here.
 
 ## Radio use
 

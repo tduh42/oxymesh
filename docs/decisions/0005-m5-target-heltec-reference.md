@@ -11,10 +11,10 @@ The project has two devices: a ThinkNode M5 (the target, the Bluetooth device in
 
 - The **M5** gets our firmware from MC4 on; it is no longer the everyday device during development. Going back to the C++ firmware is done by flashing the official release (`ThinkNode_M5_companion_radio_ble-v1.18.0-*-merged.bin`), and the original state is recovered (ADR-0006).
 - The **Heltec** stays on C++ and serves as the **reference**:
-  - for the companion protocol (`mc conform`);
+  - for the companion protocol (`mc airtest`, `mc duo`);
   - over the air: `LOG_RX_DATA` (0x88) reports every received packet, `SEND_RAW_PACKET` (65) transmits an arbitrary packet.
 
 ## Consequences
 
-- The Heltec build of our firmware is postponed; its pins (copied from loranet) stay in `board/heltec_v4.rs`.
+- The Heltec build of our firmware is postponed; its pins (copied from loranet) stay in `firmware/esp32s3/src/heltec_v4.rs`. (It came in B2, `docs/spec/heltec-v4.md`.)
 - Over-the-air tests run between our two devices; captures from the real network are only used locally.

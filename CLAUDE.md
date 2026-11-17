@@ -40,11 +40,12 @@ crates/
   mc-proto/   no_std  companion protocol (docs/spec/companion.md), both directions; Strict (app) and Device decoding
   mc-node/    no_std  the state machine: dispatcher, mesh, chat, companion, settings; persistence as StoreOp
   mc-spiffs/  no_std  read-only SPIFFS reader and importers for the C++ firmware
+  mc-nmea/    no_std  GPS: NMEA RMC/GGA parsing in integers, the receivers' setup (L76K, AG3352)
   mc-server/  no_std  server roles on a node in server mode (docs/spec/server.md, ADR-0010): repeater and room server; access list, logins, requests, console, neighbours, discovery, posts, adverts
   mc-ui/      no_std  200×200 screens (docs/spec/ui.md) on Ratatui + mousefood, with alloc (ADR-0008); gestures, e-paper refresh policy; 128×64 status pages
   mc-sim/     std     simple simulated radio linking several mc-node instances
-  mc-cli/     std     `mc` binary: info, probe, sniff, inject, emu, conform, spiffs, ui
-firmware/esp32s3/     SEPARATE workspace (Xtensa `esp` toolchain): drivers, the shared runner (`src/run/`, ADR-0009), one binary per board and role (mc-m5, mc-heltec-v4 companions; rpt-m5, rpt-heltec-v4 repeaters; room-m5, room-heltec-v4 room servers, sharing src/bin/server/)
+  mc-cli/     std     `mc` binary: the device's interface in a terminal (ui), queries and settings over USB or Bluetooth, radio tests against a C++ node (duo, airtest, burst, soak), sniff/inject, spiffs (§7)
+firmware/esp32s3/     SEPARATE workspace (Xtensa `esp` toolchain): drivers, the shared runner (`src/run/`, ADR-0009; crash handling and watchdog in `run/crash.rs`, ADR-0013), one binary per board and role (mc-m5, mc-heltec-v4 companions; rpt-m5, rpt-heltec-v4 repeaters; room-m5, room-heltec-v4 room servers, sharing src/bin/server/); ui-spike and gps-probe only with `--features spikes`
 fuzz/                 cargo-fuzz targets (separate workspace, nightly)
 config/               regions (radio preset + scope) and regulations (TOML, with sources)
 docs/spec/            specifications — source of truth
@@ -74,24 +75,25 @@ Part of the firmware base (esp-hal setup, SX1262 driver) comes from loranet, an 
   - companion protocol: meshcore.js (`testdata/proto/gen.mjs`);
   - captures from **our own devices** only. Captures from the real network stay local (`/local/`, ignored by git).
 - One `cargo-fuzz` target per decoder, created **together with** it.
-- `mc conform`: differential comparison of the C++ firmware's responses (Heltec V4, reference) with ours.
+- Against the C++ firmware (Heltec V4, reference): `mc airtest` (mc-air against a C++ node), `mc duo` (two companions talk), `mc soak` (long runs). A command-by-command `mc conform` was planned in MC3 and never built.
+- Firmware: `scripts/firmware-ci.sh` (format, clippy with and without `debug-log`, build, `scripts/size.sh`: the M5 image under 90 % of its partition).
 - Hardware: M5 = device under test, Heltec V4 running MeshCore C++ v1.18 USB = reference (`LOG_RX_DATA` and `SEND_RAW_PACKET` make it an over-the-air oracle).
 
 ## 5. Roadmap
 
-Each milestone is committed once finished and tested. Done: MC0–MC7 (plus U0–U7, H1, H2 for the interface and the hardware). Open: MC8.
+Each milestone is committed once finished and tested. Done: MC0–MC7, plus U0–U12 (interface), H1, H2, B1, B2, G2 (hardware, Heltec, GPS), S1, S2 (servers), P1, P2 (power), R1–R4 (radio, reliability). Open: MC8; battery-life numbers for P1/P2; the Heltec builds have not run on hardware since P1.
 
 0. **MC0** — repository, ADRs 0001-0007, `air`, `companion`, `m5`, `ui` specs.
 1. **MC1** — `mc-core` + `mc-air`; Python oracle; `mc info|sniff|inject`.
 2. **MC2** — complete `mc-proto` (66 commands, 29 responses, 17 notifications), Strict and Device modes.
-3. **MC3** — `mc-node` + `mc-sim`; `mc emu`, `mc conform`.
+3. **MC3** — `mc-node` + `mc-sim` (`mc emu` became `mc ui`; `mc conform` was not built, see §4).
 4. **MC4** — the M5 over USB: radio (transmit, CAD), storage, board, battery, clock, GPS, potentiometer.
 5. **MC5** — Bluetooth (NUS, LESC, PIN, MTU), official app and loranet's web app.
 6. **MC6** — migration from the C++ firmware's SPIFFS.
 7. **MC7** — new e-paper interface.
 8. **MC8** — 24 h endurance run on the network, and measurements (`docs/measurements.md`).
 
-Server roles (`mc-server`): the repeater (S1) and the room server (S2), on the M5 and the Heltec V4. Main loops sleep until something happens (P1, ADR-0012); repeaters light-sleep with `powersaving on` (P2). Later: nRF52 (ThinkNode M1, T-Echo).
+Server roles (`mc-server`): the repeater (S1) and the room server (S2), on the M5 and the Heltec V4. Main loops sleep until something happens (P1, ADR-0012); repeaters light-sleep with `powersaving on` (P2). A panic or a stuck loop restarts the device, the radio chip is reset when it stops listening (ADR-0013). Later: nRF52 (ThinkNode M1, T-Echo).
 
 ## 6. Do not
 
@@ -135,7 +137,12 @@ cargo run --release -p mc-cli -- log <port> --secs 30        # what a debug-log 
 cargo run --release -p mc-cli -- spiffs <image>             # what the C++ firmware left in a SPIFFS image (espflash read-flash 0x290000 0x160000; keep it out of git)
 python3 -I testdata/spiffs/gen.py                           # the made-up C++ SPIFFS test images (cpp.bin, cpp-repeater.bin)
 cargo run --release -p mc-cli -- duo --a $M5 --b $REF   # two companions talk (adverts, DMs, channel, pings), zero-hop; --flood for more
-cargo run --release -p mc-cli -- soak --a $M5 --b $REF --runs 100   # long soak that never reads a message queue (adverts, B→A DMs acknowledged, pings, A's restarts)
+cargo run --release -p mc-cli -- soak --a $M5 --b $REF --runs 100   # long soak that never reads a message queue (adverts, B→A DMs acknowledged, pings, A's restarts); Ctrl-C restores the settings
+cargo run --release -p mc-cli -- telemetry <port> [0x00]     # telemetry permissions byte, or set it
+cargo run --release -p mc-cli -- tx-power <port> [dBm]       # transmit power, or set it
+cargo run --release -p mc-cli -- heard <port>                # when the device last heard its contacts, per hour (no names)
+scripts/firmware-ci.sh                                        # the firmware checks alone; scripts/size.sh after a release build
+FEATURES=debug-log OXYMESH_CRASH_TEST=panic scripts/flash.sh m5 <port>   # a build that panics once, 20 s after power-on (or =hang): proves the restart (ADR-0013)
 ```
 
 Hardware setup: a Heltec V4 running MeshCore C++ v1.18 over USB as the reference (`/dev/cu.usbmodem*` on macOS), the ThinkNode M5 on `/dev/cu.wchusbserial*` (CH340 bridge; on macOS the WCH driver). The numbers change whenever USB re-enumerates: check `ls /dev/cu.*` first.

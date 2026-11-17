@@ -15,5 +15,5 @@ MeshCore has six roles (BLE/USB/WiFi companion, repeater, room server, sensor, t
 
 ## Consequences
 
-- The repeater and room server roles will come later on the same state machine, without a redesign.
+- The repeater and room server roles will come later on the same state machine, without a redesign. (Done in S1 and S2: ADR-0010.)
 - The client-side features towards repeaters and room servers (login, status, telemetry, binary and anonymous requests, trace, discovery) are part of the companion and are delivered.

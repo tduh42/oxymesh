@@ -434,7 +434,7 @@ impl Server {
             || c.starts_with("log erase")
             || (ts == 0 && c.starts_with("log"))
         {
-            // No packet log is kept (`docs/spec/server.md` §2.11).
+            // No packet log is kept (`docs/spec/server.md` §4.6).
             w(out, "Error: unsupported");
         } else if ts == 0 && Self::word(c, "stats-packets") {
             let s = &node.disp.stats;

@@ -33,6 +33,6 @@ Tanguy asked for a better-looking interface and chose, on mockups drawn at the p
 
 - Each pixel screen has two renderings, the grid and the scene, built from the same data. Navigation and their tests are unaffected.
 - The fonts add to the image size (each Helvetica size is a few KB). Heap use per frame is small: a scene is a short list of items.
-- ADR-0008's budget, measured on the grid, has to be checked again once the pixel screens land (U10).
+- ADR-0008's budget, measured on the grid, had to be checked again once the pixel screens landed: the heap peaked at 72,952 of 98,300 B while typing with a phone connected (U11, `docs/measurements.md`).
 - Rejected: dropping Ratatui. Settings, tools and the terminal emulator rely on it, and they work.
 - Rejected: our own bitmap fonts. Drawing and maintaining them would cost more than U8g2's permissive ones.

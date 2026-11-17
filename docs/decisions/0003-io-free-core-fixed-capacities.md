@@ -16,6 +16,6 @@ The same protocol must run on the ESP32-S3 without PSRAM (≈ 320 KB of usable R
 
 ## Consequences
 
-- The same tests run on the host and describe the device's behavior; `mc emu` and `mc-sim` link several state machines without hardware.
+- The same tests run on the host and describe the device's behavior; `mc-sim` links several state machines without hardware (`mc ui` runs the device's interface on it).
 - Estimated RAM budget: contacts 350 × (152 + 32 of cached shared secret) ≈ 64 KB, packets 8 KB, screen 5 KB. The real peak is measured from MC4 on.
 - Rejected: porting the C++ as is behind an FFI (we would lose testability and the benefit of Rust).

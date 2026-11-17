@@ -344,8 +344,6 @@ A SPIFFS holding `/s_contacts` or `/regions2` is a server's (`is_server`). The i
 
 `discovery_mod_timestamp` is not in the C++'s `/prefs.json`, so it restarts at 0. `mc spiffs <image>` shows what an import would bring. The test image is `testdata/spiffs/cpp-repeater.bin`, made up by `testdata/spiffs/gen.py`.
 
-To be written with milestone S2.
-
 ## 6. Firmware (`rpt-*`, `room-*`)
 
 `firmware/esp32s3/src/bin/server/{m5,heltec_v4}.rs`, one per board, take the role: `rpt-*` binaries run a repeater, `room-*` binaries a room server. They sit on the shared runner (ADR-0009). The radio loop takes a `run::radio::Mesh`: a companion `Device`, or here a bare `Node`. Flash with `scripts/flash.sh m5-repeater|heltec-v4-repeater|m5-room|heltec-v4-room <port>`.

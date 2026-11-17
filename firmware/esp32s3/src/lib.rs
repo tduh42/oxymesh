@@ -25,6 +25,7 @@ pub mod m5 {
     /// PA current limit (`SX126X_CURRENT_LIMIT`).
     pub const OCP_MA: u16 = 140;
     pub const TX_POWER_MAX: i8 = 22;
-    /// Battery measurement divider (2.0 in Meshtastic, 2.11 in MeshCore): to be calibrated.
+    /// Battery measurement divider (2.0 in Meshtastic, 2.11 in MeshCore): not calibrated
+    /// against a voltmeter yet (`docs/spec/m5.md` §3).
     pub const BATTERY_DIVIDER_MILLI: u32 = 2000;
 }
