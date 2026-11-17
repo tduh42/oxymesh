@@ -352,47 +352,100 @@ impl<S: NorFlash> FlashStore<S> {
 
     /// Erases the whole partition (`FACTORY_RESET`).
     /// A server's records back into `node` and `r` (before `Server::start`).
+    /// A server's settings, clients and regions, in one pass over the storage (as
+    /// [`FlashStore::load`]): the last version of each key wins, as `get` would return it.
     pub fn load_server(&mut self, node: &mut Node, r: &mut Server) {
-        let mut b = [0u8; PREFS_RECORD];
-        if let Some(n) = self.get(KEY_PREFS, &mut b)
+        const CLIENTS_MAX: usize = 32;
+        let mut prefs: Option<([u8; PREFS_RECORD], usize)> = None;
+        let mut settings: Option<[u8; SETTINGS_RECORD]> = None;
+        let mut client_count = 0usize;
+        let mut clients = [[0u8; CLIENT_RECORD]; CLIENTS_MAX];
+        let mut client_ok = [false; CLIENTS_MAX];
+        let mut head: Option<[u8; FILE_HEADER + 1]> = None;
+        // The region entries in their place in the file, after its header.
+        let mut file = alloc::vec![0u8; FILE_MAX];
+        let mut entry_ok = [false; REGIONS_MAX];
+        let mut buf = [0u8; BUF];
+        let Ok(mut it) = block_on(self.map.fetch_all_items(&mut buf)) else {
+            self.errors += 1;
+            return;
+        };
+        loop {
+            let (key, value) = match block_on(it.next::<&[u8]>(&mut buf)) {
+                Ok(Some(kv)) => kv,
+                Ok(None) => break,
+                Err(_) => {
+                    self.errors += 1;
+                    break;
+                }
+            };
+            match key {
+                KEY_PREFS => {
+                    // Longer than a record: unreadable, as `get` would find it.
+                    let mut b = [0u8; PREFS_RECORD];
+                    prefs = match b.get_mut(..value.len()) {
+                        Some(d) => {
+                            d.copy_from_slice(value);
+                            Some((b, value.len()))
+                        }
+                        None => None,
+                    };
+                }
+                KEY_SERVER => settings = value.try_into().ok(),
+                KEY_CLIENT_COUNT => {
+                    client_count = match value {
+                        [n] => usize::from(*n),
+                        _ => 0,
+                    };
+                }
+                KEY_REGIONS => head = value.try_into().ok(),
+                k if (CLIENT_BASE..CLIENT_BASE + CLIENTS_MAX as u32).contains(&k) => {
+                    let i = (k - CLIENT_BASE) as usize;
+                    match <[u8; CLIENT_RECORD]>::try_from(value) {
+                        Ok(rec) => {
+                            clients[i] = rec;
+                            client_ok[i] = true;
+                        }
+                        Err(_) => client_ok[i] = false,
+                    }
+                }
+                k if (REGION_BASE..REGION_BASE + REGIONS_MAX as u32).contains(&k) => {
+                    let i = (k - REGION_BASE) as usize;
+                    let at = FILE_HEADER + i * FILE_ENTRY;
+                    match (value.len() == FILE_ENTRY, file.get_mut(at..at + FILE_ENTRY)) {
+                        (true, Some(slot)) => {
+                            slot.copy_from_slice(value);
+                            entry_ok[i] = true;
+                        }
+                        _ => entry_ok[i] = false,
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some((b, n)) = prefs
             && n >= PREFS_RECORD_V1
             && let Some(p) = decode_prefs(&b[..n], &node.prefs)
         {
             node.prefs = p;
         }
-        let mut settings = [0u8; SETTINGS_RECORD];
-        let has_settings = self.get(KEY_SERVER, &mut settings) == Some(SETTINGS_RECORD);
-        let mut cnt = [0u8; 1];
-        let count = match self.get(KEY_CLIENT_COUNT, &mut cnt) {
-            Some(1) => usize::from(cnt[0]),
-            _ => 0,
-        };
-        let mut clients: heapless::Vec<[u8; CLIENT_RECORD], 32> = heapless::Vec::new();
-        for i in 0..count.min(32) {
-            let mut rec = [0u8; CLIENT_RECORD];
-            if self.get(CLIENT_BASE + i as u32, &mut rec) == Some(CLIENT_RECORD) {
-                let _ = clients.push(rec);
-            }
-        }
-        let mut file = alloc::vec![0u8; FILE_MAX];
-        let mut head = [0u8; FILE_HEADER + 1];
+        // Clients below the stored count with a whole record, in order.
+        let kept = (0..client_count.min(CLIENTS_MAX))
+            .filter(|&i| client_ok[i])
+            .map(|i| clients[i]);
+        let kept: heapless::Vec<[u8; CLIENT_RECORD], CLIENTS_MAX> = kept.collect();
+        // The regions file: its header, then the entries up to the first missing one.
         let mut len = 0;
-        if self.get(KEY_REGIONS, &mut head) == Some(FILE_HEADER + 1) {
-            file[..FILE_HEADER].copy_from_slice(&head[..FILE_HEADER]);
-            len = FILE_HEADER;
-            for i in 0..usize::from(head[FILE_HEADER]).min(REGIONS_MAX) {
-                let mut e = [0u8; FILE_ENTRY];
-                if self.get(REGION_BASE + i as u32, &mut e) != Some(FILE_ENTRY) {
-                    break;
-                }
-                file[len..len + FILE_ENTRY].copy_from_slice(&e);
-                len += FILE_ENTRY;
-            }
+        if let Some(h) = head {
+            file[..FILE_HEADER].copy_from_slice(&h[..FILE_HEADER]);
+            let n = usize::from(h[FILE_HEADER]).min(REGIONS_MAX);
+            let whole = entry_ok.iter().take(n).take_while(|ok| **ok).count();
+            len = FILE_HEADER + whole * FILE_ENTRY;
         }
         r.restore(
             node,
-            has_settings.then_some(&settings[..]),
-            clients.iter().map(|c| &c[..]),
+            settings.as_ref().map(|s| &s[..]),
+            kept.iter().map(|c| &c[..]),
             (len > 0).then_some(&file[..len]),
         );
     }
