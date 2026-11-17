@@ -13,12 +13,18 @@ use ratatui_widgets::list::ListState;
 use ratatui_widgets::paragraph::{Paragraph, Wrap};
 
 use super::chat::{Compose, Target};
+use super::pixel::{self, Row};
 use super::{draw_list, name_of, rows, step};
 use crate::act::{Intent, Outcome};
 use crate::app::{Confirm, Input, Nav, Screen, Ui};
 use crate::chrome::Footer;
 use crate::clock;
 use crate::regions::{Region, presets};
+use crate::scene::{Icon, Scene};
+
+const REGION_NOTE: &str = "Radio settings shared by the nodes around you.";
+const TIME_NOTE: &str =
+    "The phone app sets the time when it connects; the GPS does too once it has a fix.";
 
 /// Step 1: the region preset.
 #[derive(Debug)]
@@ -74,8 +80,7 @@ impl Screen for SetupRegion {
                 .map(|g| (g.name.clone(), describe(g.freq_khz, g.sf))),
         );
         f.render_widget(
-            Paragraph::new("Radio settings shared by the nodes around you.")
-                .wrap(Wrap { trim: true }),
+            Paragraph::new(REGION_NOTE).wrap(Wrap { trim: true }),
             rows(body, 0, 2),
         );
         draw_list(
@@ -85,6 +90,23 @@ impl Screen for SetupRegion {
             &mut self.state,
             ui,
         );
+    }
+
+    /// On the panel: the note, then "Keep current" and the presets, each with its frequency.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let r = &ui.ctx.dev.node.prefs.radio;
+        let mut rows_ = alloc::vec![Row::item(
+            Some(Icon::Check),
+            "Keep current",
+            describe(r.freq_khz, r.sf)
+        )];
+        rows_.extend(
+            self.regions
+                .iter()
+                .map(|g| Row::item(None, &g.name, describe(g.freq_khz, g.sf))),
+        );
+        let sel = self.state.selected().unwrap_or(0);
+        Some(pixel::headed_list(ui, w, h, REGION_NOTE, &rows_, sel))
     }
 
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {
@@ -154,9 +176,7 @@ impl Screen for SetupTime {
         let lines = alloc::vec![
             Line::from(state),
             Line::from(""),
-            Line::from(
-                "The phone app sets the time when it connects; the GPS does too once it has a fix."
-            ),
+            Line::from(TIME_NOTE),
             Line::from(""),
             Line::from("Hold A to finish."),
         ];
@@ -164,6 +184,24 @@ impl Screen for SetupTime {
             Paragraph::new(lines).wrap(Wrap { trim: true }),
             rows(body, 1, body.height.saturating_sub(1)),
         );
+    }
+
+    /// On the panel: the clock as it is, where the time comes from, how to finish.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let t = ui.ctx.time();
+        let y = match t {
+            Some(_) => pixel::fields(
+                &mut sc,
+                w,
+                0,
+                &[("Clock", format!("{} {}", clock::hhmm(t), clock::date(t)))],
+            ),
+            None => pixel::note(&mut sc, w, 0, "Clock not set yet."),
+        };
+        let y = pixel::note(&mut sc, w, y + 6, TIME_NOTE);
+        pixel::note(&mut sc, w, y + 6, "Hold A to finish.");
+        Some(sc)
     }
 
     fn input(&mut self, input: Input, _ui: &Ui<'_>) -> Nav {

@@ -1,0 +1,19 @@
+---
+source: crates/mc-ui/tests/screens.rs
+expression: "text(&mut app, grid, &c)"
+---
+|Range Bob    ●2 18:33 87%|
+|Answered           0/0 0%|
+|RTT                     -|
+|SNR                     -|
+|Test              running|
+|                         |
+|                         |
+|                         |
+|SNR of the answers       |
+|                         |
+|                         |
+|                         |
+|                         |
+|                         |
+|hold▸pause         B◂back|

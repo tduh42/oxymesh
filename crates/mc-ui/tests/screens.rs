@@ -605,7 +605,7 @@ fn draw_panel(app: &mut App, grid: Grid, c: &Ctx<'_>) {
 fn main_screens_draw_their_body_in_pixels() {
     let w = world();
     let c = ctx(&w);
-    let cases: [(&[Gesture], &[&str]); 14] = [
+    let cases: [(&[Gesture], &[&str]); 20] = [
         (
             &[],
             &["Messages", "Contacts", "Map", "Bob", "Coffee at the refuge"],
@@ -685,6 +685,80 @@ fn main_screens_draw_their_body_in_pixels() {
                 "Duty 0.00% of 10.0% (g3)",
             ],
         ),
+        // GPS (9th tool), Discover (2nd), and first-boot setup again (System, 2nd).
+        (
+            &[
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+            ],
+            &["GPS off.", "Shared position", "none"],
+        ),
+        (
+            &[Click(A), Click(A), Click(A), Long(A), Click(A), Long(A)],
+            &["Hold A to find"],
+        ),
+        (
+            &[Double(A), Long(A), Double(A), Long(A), Click(A), Long(A)],
+            &["Radio settings shared", "Keep current", "SF8"],
+        ),
+        // Trace (3rd), ping & range (4th), repeater admin (8th): each on the first contact the
+        // picker offers.
+        (
+            &[
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Long(A),
+            ],
+            &["trace"],
+        ),
+        (
+            &[
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Long(A),
+            ],
+            &["Answered", "Test", "SNR of the answers"],
+        ),
+        (
+            &[
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Long(A),
+            ],
+            &["Not logged in.", "Login as guest", "Status", "Neighbours"],
+        ),
         // A settings page (no icons), and a picker.
         (
             &[
@@ -730,15 +804,16 @@ fn main_screens_draw_their_body_in_pixels() {
                 );
             }
         }
-        // A tool page that stays text: Tools → Discover.
+        // The map is still grid text (with a pixel overlay once there is a position): Tools →
+        // Map (last), here with no position.
         let mut app = App::new(grid, true);
         press(
             &mut app,
             &c,
-            &[Click(A), Click(A), Click(A), Long(A), Click(A), Long(A)],
+            &[Click(A), Click(A), Click(A), Long(A), Double(A), Long(A)],
         );
         draw_panel(&mut app, grid, &c);
-        assert!(body_overlays(&app).is_empty());
+        assert!(body_overlays(&app).is_empty(), "{:?}", body_overlays(&app));
     }
 }
 
@@ -959,11 +1034,11 @@ fn the_banner_is_a_card_over_the_faded_screen() {
         outgoing: false,
     };
     for grid in [LARGE, COMPACT] {
-        // Over Home (pixels), and over a tool page that stays text: Tools → Discover.
+        // Over Home (pixels), and over a page that stays text: Tools → Map (last).
         for (gestures, under) in [
             (&[][..], 1),
             (
-                &[Click(A), Click(A), Click(A), Long(A), Click(A), Long(A)][..],
+                &[Click(A), Click(A), Click(A), Long(A), Double(A), Long(A)][..],
                 0,
             ),
         ] {
