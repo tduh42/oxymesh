@@ -294,7 +294,7 @@ impl World {
         for sn in &mut self.nodes {
             sn.dev.tick(now, &mut sn.rng, &mut sn.st);
             sn.drain(now);
-            while let Some(f) = sn.dev.poll_app() {
+            while let Some(f) = sn.dev.poll_app(true) {
                 sn.app.push(f);
             }
             if let Some(srv) = sn.server.as_mut() {
@@ -377,7 +377,7 @@ impl World {
         let sn = &mut self.nodes[i];
         sn.dev.on_app_frame(now, frame, &mut sn.rng, &mut sn.st);
         let mut out = Vec::new();
-        while let Some(f) = sn.dev.poll_app() {
+        while let Some(f) = sn.dev.poll_app(true) {
             out.push(f);
         }
         sn.drain(now);

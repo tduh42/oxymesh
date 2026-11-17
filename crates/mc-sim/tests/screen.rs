@@ -122,7 +122,7 @@ fn queue_and_history_survive_a_reboot() {
     let mut st = st;
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(1);
     dev.on_app_frame(w.now, &enc(&Command::SyncNextMessage), &mut rng, &mut st);
-    let f = dev.poll_app().unwrap();
+    let f = dev.poll_app(true).unwrap();
     match Response::decode(&f).unwrap() {
         // No DEVICE_QUERY yet: the legacy frame, like the C++ firmware.
         Response::ContactMsgLegacy { text, .. } => assert_eq!(text, b"still here after reboot"),

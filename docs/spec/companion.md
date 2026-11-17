@@ -48,6 +48,7 @@ Abbreviations: `M` = `examples/companion_radio/MyMesh.cpp`, `M.h` = `MyMesh.h`, 
 - One write = one frame; one notification = one frame. No extra framing.
 - Input: queue of 4 frames; a frame > 176 bytes or a full queue → frame dropped (BLE:114-129).
 - Output: queue of 4 frames (full → dropped); at most one notification every **60 ms** (BLE:168-209).
+- Pace (`mc_proto::ble::BleLink::ready`, `run::link`): with a phone connected, the contacts of a GET_CONTACTS (and END_OF_CONTACTS) go out one at a time, the next once the queue is empty, about one every 60 ms (112 contacts ≈ 7 s). The C++ waits for `!isWriteBusy()`, 60 ms after the last notification (M:2388-2413, BLE:191-193); our notifications come from the Bluetooth task, so the empty queue is the equivalent that never stacks contacts. Without a phone, frames go to USB at full speed. Other frames wait in the device while the queue is full instead of being dropped (§9, 13). A queue with frames and no notification for 2 s (`STALL_MS`) is stalled: frames then flow again, Bluetooth dropping what does not fit as the C++, so a phone that stops reading never holds USB back.
 - Disconnection: queues flushed, advertising restarts after 1000 ms. The state machine's state is **not** reset (`app_target_ver`, offline queue, contact iteration) (BLE:104-110, 218-237). No advertising while connected.
 
 ### 1.2 USB / serial (ASI:24-73)
@@ -71,7 +72,7 @@ Each outgoing frame goes out on **all** active interfaces; the first available f
 | 1 | APP_START | len ≥ 8; `[1..7]` reserved, `[8..]` app name | SELF_INFO (§3.1); interrupts a contact iteration | M:1076-1117 |
 | 2 | SEND_TXT_MSG | len ≥ 14; `[1]` txt_type, `[2]` attempt, `[3..6]` ts, `[7..12]` key prefix (6), `[13..]` text | type 0: SENT with expected ACK (entered into the ring of 8). Types 1 and 3: ts replaced by the device's unique time, ACK 0. Unknown contact → ERR 2; other type → ERR 1; failure or text too long → ERR 3 | M:1132-1177 |
 | 3 | SEND_CHANNEL_TXT_MSG | `[1]` txt_type (0), `[2]` channel, `[3..6]` ts, `[7..]` text (may be empty); no length check: below 7 bytes, a negative text length is passed to `memcpy` (undefined behavior, BCM:528; deliberate deviation 7) | **OK** (not SENT). Transmitted: `"<name>: <text>"` truncated to 160. Invalid channel or send failure → ERR 2; type ≠ 0 → ERR 1 | M:1178-1197, BCM:518-537 |
-| 4 | GET_CONTACTS | `[1..4]` since, read only if len ≥ 5 (else 0) | CONTACTS_START (2) `[1..4]` = total count; one CONTACT (3) per contact with `lastmod > since`; END_OF_CONTACTS (4) `[1..4]` = highest lastmod sent (0 if none). One contact per loop iteration, at the interface's pace. New request during the iteration → ERR 4 | M:1238-1258, 2388-2409 |
+| 4 | GET_CONTACTS | `[1..4]` since, read only if len ≥ 5 (else 0) | CONTACTS_START (2) `[1..4]` = total count; one CONTACT (3) per contact with `lastmod > since`; END_OF_CONTACTS (4) `[1..4]` = highest lastmod sent (0 if none). One contact per loop iteration, at the interface's pace (over Bluetooth, once its queue is empty: §1.1). New request during the iteration → ERR 4 | M:1238-1258, 2388-2409 |
 | 5 | GET_DEVICE_TIME | — | CURR_TIME (9) `[1..4]` = Unix time | M:1281-1286 |
 | 6 | SET_DEVICE_TIME | len ≥ 5; `[1..4]` time | OK if ≥ current time, otherwise **ERR 6** (the clock never goes back) | M:1287-1296 |
 | 7 | SEND_SELF_ADVERT | `[1]` optional: 1 = flood (default scope), otherwise zero-hop | OK or ERR 3; position included if `advert_loc_policy ≠ 0` | M:1297-1316 |
@@ -324,6 +325,7 @@ Settings record v2 (160 bytes, `mc_node::persist`). Fields were added within v2 
 10. USB stays a companion interface next to Bluetooth (the M5's C++ BLE build has Bluetooth only). As in §1.3, every frame goes out on both and either can send commands. With nothing on the USB port this is invisible.
 11. The GAP device name (read after connecting) holds at most 22 bytes, the `trouble-host` limit: `MeshCore-` and the first 13 bytes of the node name. The advertised name, which apps show while scanning, is whole up to 29 bytes as in the C++.
 12. Within the EU profile (`config/eu868.toml`), the radio transmits at most at the power the sub-band allows, counting the board's amplifier, and keeps the sub-band's duty cycle on top of the C++ airtime budget (`docs/spec/air.md` §4.5). The setting itself is untouched: the app reads back what it set.
+13. A frame for a connected phone is never dropped because the Bluetooth queue (4 frames) is full: it waits in the device's own queue (8 frames) until a notification frees a slot, for 2 s at most (§1.1). The C++ drops it (BLE:175-178). Invisible to the app, except that replies arrive instead of going missing; found with 112 contacts, where the C++-style drain lost the list's end (`crates/mc-sim/tests/ble_pacing.rs`).
 
 ## 10. Device-side decoding (ADR-0002)
 
