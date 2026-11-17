@@ -33,6 +33,10 @@ On Linux, `mc` needs the D-Bus headers for its Bluetooth client (`libdbus-1-dev`
 
 ### Flash a board
 
+**Without building:** every merge into `main` publishes the firmware for each board and role as the [`nightly` prerelease](https://github.com/tduh42/oxymesh/releases/tag/nightly), and a version tag makes a [release](https://github.com/tduh42/oxymesh/releases). Each comes with the `espflash` command that flashes it; only [espflash](https://github.com/esp-rs/espflash) is needed.
+
+**From source:**
+
 1. **Install the toolchains.**
    - [rustup](https://rustup.rs). The host crates pin their own Rust version in `rust-toolchain.toml`.
    - The Xtensa toolchain: `cargo install espup --locked && espup install --targets esp32s3`.
