@@ -3,11 +3,11 @@ source: crates/mc-ui/tests/screens.rs
 expression: "text(&mut app, grid, &c)"
 ---
 |Bluetooth            ●2 18:33 87%|
-|► Status                      off|
+|► Bluetooth                    on|
+|  Status                      off|
 |  PIN                      random|
 |  New random PIN                 |
 |  Paired phones                 0|
-|                                 |
 |                                 |
 |                                 |
 |                                 |

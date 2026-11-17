@@ -212,6 +212,10 @@ pub trait Screen: core::fmt::Debug {
     fn typing(&self) -> bool {
         false
     }
+    /// Needs its ticks to go on (a running range test): the device must not sleep through them.
+    fn ticking(&self) -> bool {
+        false
+    }
     /// Called regularly while the screen is shown (the range test sends its pings here).
     fn tick(&mut self, _ui: &Ui<'_>) -> Nav {
         Nav::Stay
@@ -343,6 +347,12 @@ impl App {
     /// click nor be taken for one.
     pub fn typing(&self) -> bool {
         self.stack.last().is_some_and(|s| s.typing())
+    }
+
+    /// Nothing on screen waits for a tick: no toast to clear, no screen counting time. A device
+    /// that may sleep (ADR-0014) can then skip the interface's ticks.
+    pub fn at_rest(&self) -> bool {
+        self.toast.is_none() && !self.stack.last().is_some_and(|s| s.ticking())
     }
 
     /// Something changed since the last draw.

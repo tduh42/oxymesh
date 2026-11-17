@@ -458,7 +458,7 @@ fn forgetting_paired_phones_needs_a_hold() {
     let mut c = ctx(&w);
     c.ble = ble(mc_ui::BleState::Connected);
     let mut app = App::new(LARGE, false);
-    // Home → Settings → Bluetooth (third) → Paired phones (fourth).
+    // Home → Settings → Bluetooth (third) → Paired phones (fifth, after the on/off item).
     let intents = press(
         &mut app,
         &c,
@@ -468,6 +468,7 @@ fn forgetting_paired_phones_needs_a_hold() {
             Click(A),
             Click(A),
             Long(A),
+            Click(A),
             Click(A),
             Click(A),
             Click(A),

@@ -394,6 +394,28 @@ pub fn bluetooth() -> Menu {
         "Bluetooth",
         &[
             Item::with(
+                "Bluetooth",
+                |ui| {
+                    String::from(if prefs(ui).ui.bluetooth_off {
+                        "off"
+                    } else {
+                        "on"
+                    })
+                },
+                Action::Run(|ui| {
+                    let off = prefs(ui).ui.bluetooth_off;
+                    let text = if off {
+                        "Turn Bluetooth on: the phone app can connect again. The device restarts."
+                    } else {
+                        "Turn Bluetooth off: no phone can connect, USB still works, and on battery the device sleeps between events. The device restarts."
+                    };
+                    Nav::Confirm(
+                        Confirm::new("Bluetooth", text, Intent::SetBluetooth(!off))
+                            .with_toast("Restarting"),
+                    )
+                }),
+            ),
+            Item::with(
                 "Status",
                 |ui| {
                     String::from(match ui.ctx.ble.state {

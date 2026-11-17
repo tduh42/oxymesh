@@ -312,7 +312,7 @@ Like the C++ repeater on ESP32 (`examples/simple_repeater/main.cpp` `loop`, `ESP
   - The Heltec V4 also stays awake while its screen is lit (a minute after the button).
   - On the M5, typing on the console wakes it; the first characters are lost (the UART counts edges to wake). On the Heltec V4 the chip's own USB sleeps too: the computer sees the console come and go.
 - Room servers keep the setting, answer the same, and never sleep, like the C++ (`examples/simple_room_server/main.cpp` never calls `board.sleep`).
-- Companions never sleep this way: Bluetooth needs the chip awake (as in the C++).
+- Companions never sleep this way while Bluetooth is on: it needs the chip awake (as in the C++). An M5 companion with Bluetooth off does, on battery (ADR-0014).
 
 ## 5. Storage and import
 

@@ -123,6 +123,9 @@ pub struct UiPrefs {
     pub muted: u64,
     /// What notifications and previews show of a message (`docs/spec/ui.md` §8).
     pub previews: Previews,
+    /// Bluetooth off: the controller is not started at boot, and on battery the M5 light-sleeps
+    /// between events (ADR-0014). Takes effect at the next boot.
+    pub bluetooth_off: bool,
 }
 
 /// What the screen shows of a message outside its open conversation: in the new-message
@@ -178,6 +181,7 @@ impl UiPrefs {
         rotate: false,
         muted: 0,
         previews: Previews::Shown,
+        bluetooth_off: false,
     };
 
     pub fn is_muted(&self, channel: u8) -> bool {

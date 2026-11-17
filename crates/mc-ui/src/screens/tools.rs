@@ -428,6 +428,10 @@ impl Screen for RangeTest {
         Nav::Stay
     }
 
+    fn ticking(&self) -> bool {
+        self.running
+    }
+
     fn tick(&mut self, ui: &Ui<'_>) -> Nav {
         self.collect(ui);
         let now = ui.ctx.now_ms;
