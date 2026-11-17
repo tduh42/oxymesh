@@ -196,7 +196,7 @@ impl Screen for ContactScreen {
         sc.hline(0, wi - 1, y + 1);
         // The actions, 3 × 3.
         let top = y + 4;
-        let tw = (w - 8 - 4) / 3;
+        let (tw, tile_x) = super::pixel::tile_columns(w, 3);
         let th = ((hi - top - 4) / 3).clamp(20, 40) as u16;
         let sel = self.state.selected().unwrap_or(0) % ACTS.len();
         let unread = ctx.dev.history().unread_with(self.peer());
@@ -210,8 +210,8 @@ impl Screen for ContactScreen {
             let count = if *act == Act::Messages { unread } else { 0 };
             super::pixel::tile(
                 &mut sc,
-                4 + col * (tw as i16 + 2),
-                top + row * (th as i16 + 2),
+                tile_x(col),
+                top + row * (th as i16 + super::pixel::TILE_GAP),
                 tw,
                 th,
                 icon,
@@ -342,6 +342,7 @@ impl ChannelScreen {
 
 /// Messages, Write, Mute, Remove.
 const CHANNEL_ACTS: [&str; 4] = ["Messages", "Write", "Mute", "Remove"];
+const CHANNEL_ICONS: [Icon; 4] = [Icon::Chat, Icon::Pencil, Icon::Bell, Icon::Trash];
 
 impl Screen for ChannelScreen {
     fn title(&self, ui: &Ui<'_>) -> String {
@@ -353,6 +354,82 @@ impl Screen for ChannelScreen {
             .get(usize::from(self.idx))
             .map(|c| name_of(&c.name))
             .unwrap_or_default()
+    }
+
+    /// A card like a contact's: the `#` badge and the name, what is known, then the actions as
+    /// four tiles.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let (wi, hi) = (w as i16, h as i16);
+        let peer = Peer::Channel(self.idx);
+        let hist = ui.ctx.dev.history();
+        let muted = ui.ctx.dev.node.prefs.ui.is_muted(self.idx);
+        sc.circle(20, 19, 34, true, true);
+        sc.text(
+            20,
+            19 + Font::B12.ascent() / 2,
+            Font::B12,
+            Align::Center,
+            false,
+            "#",
+        );
+        let name = scene::ellipsize(Font::B12, &self.title(ui), wi - 48);
+        sc.text(44, 16, Font::B12, Align::Left, true, &name);
+        let sub = format!("Channel · slot {}", self.idx);
+        sc.text(44, 31, Font::R8, Align::Left, true, &sub);
+        let unread = hist.unread_with(peer);
+        let count = hist.with(peer).count();
+        let lines = [
+            (
+                Icon::Chat,
+                format!(
+                    "{count} message{}, {unread} unread",
+                    if count == 1 { "" } else { "s" }
+                ),
+            ),
+            (
+                Icon::Bell,
+                String::from(if muted {
+                    "Muted: no sound, no light"
+                } else {
+                    "Notifies like a direct message"
+                }),
+            ),
+        ];
+        let mut y = 40i16;
+        for (icon, text) in &lines {
+            sc.icon(4, y, *icon, IconSize::S8, true);
+            let t = scene::ellipsize(Font::R8, text, wi - 20);
+            sc.text(16, y + 7, Font::R8, Align::Left, true, &t);
+            y += 11;
+        }
+        sc.hline(0, wi - 1, y + 1);
+        // The actions, 2 × 2.
+        let top = y + 4;
+        let (tw, tile_x) = super::pixel::tile_columns(w, 2);
+        let th = ((hi - top - 4) / 2).clamp(24, 44) as u16;
+        let sel = self.state.selected().unwrap_or(0) % CHANNEL_ACTS.len();
+        for (i, (label, icon)) in CHANNEL_ACTS.iter().zip(CHANNEL_ICONS).enumerate() {
+            let (col, row) = (i as i16 % 2, i as i16 / 2);
+            let label = if *label == "Mute" && muted {
+                "Unmute"
+            } else {
+                label
+            };
+            let badge = if i == 0 { unread } else { 0 };
+            super::pixel::tile(
+                &mut sc,
+                tile_x(col),
+                top + row * (th as i16 + super::pixel::TILE_GAP),
+                tw,
+                th,
+                icon,
+                label,
+                badge,
+                i == sel,
+            );
+        }
+        Some(sc)
     }
 
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {

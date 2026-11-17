@@ -350,7 +350,7 @@ fn overlays_never_go_stale_on_the_panel() {
             }
             press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
             t.draw(|f| app.draw(f, &c)).unwrap();
-            assert!(body_overlays(&app).is_empty());
+            assert_eq!(body_overlays(&app).len(), 1, "the menu's scene");
             for o in app.overlays() {
                 overlay::draw(o, t.backend_mut().display_mut()).unwrap();
             }
@@ -599,13 +599,13 @@ fn draw_panel(app: &mut App, grid: Grid, c: &Ctx<'_>) {
     t.draw(|f| app.draw(f, c)).unwrap();
 }
 
-/// Home, the lists, a conversation and a contact draw their body in pixels; the rest stays
-/// text.
+/// Home, the lists, a conversation, a contact, a channel, the menus and the pickers draw
+/// their body in pixels; the tool pages stay text.
 #[test]
 fn main_screens_draw_their_body_in_pixels() {
     let w = world();
     let c = ctx(&w);
-    let cases: [(&[Gesture], &[&str]); 6] = [
+    let cases: [(&[Gesture], &[&str]); 10] = [
         (
             &[],
             &["Messages", "Contacts", "Map", "Bob", "Coffee at the refuge"],
@@ -617,6 +617,41 @@ fn main_screens_draw_their_body_in_pixels() {
         (
             &[Click(A), Long(A), Long(A)],
             &["Write", "Messages", "Ping", "Trace route", "Remove"],
+        ),
+        // Tools and Settings, with each item's value on the right.
+        (
+            &[Click(A), Click(A), Click(A), Long(A)],
+            &["Heard nodes", "Discover", "Signal", "Repeater admin"],
+        ),
+        (
+            &[Double(A), Long(A)],
+            &["Radio", "SF", "Identity", "Morgan", "Bluetooth", "Display"],
+        ),
+        // A settings page (no icons), and a picker.
+        (
+            &[
+                Double(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+            ],
+            &["Text size", "large", "Light off", "Invert"],
+        ),
+        (
+            &[
+                Double(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Click(A),
+                Long(A),
+                Long(A),
+            ],
+            &["Large (25×15)", "Compact (33×20)"],
         ),
     ];
     for grid in [LARGE, COMPACT] {
@@ -637,11 +672,211 @@ fn main_screens_draw_their_body_in_pixels() {
                 );
             }
         }
-        // Tools stays a text list.
+        // A tool page stays text: Tools → Heard nodes.
         let mut app = App::new(grid, true);
-        press(&mut app, &c, &[Click(A), Click(A), Click(A), Long(A)]);
+        press(
+            &mut app,
+            &c,
+            &[Click(A), Click(A), Click(A), Long(A), Long(A)],
+        );
         draw_panel(&mut app, grid, &c);
         assert!(body_overlays(&app).is_empty());
+    }
+}
+
+/// A channel that has nothing unread opens on its own page: a card like a contact's, with its
+/// four actions as tiles.
+#[test]
+fn a_channel_page_is_a_card_with_its_actions() {
+    let mut w = world();
+    {
+        let sn = &mut w.nodes[0];
+        sn.dev
+            .mark_read(mc_node::history::Peer::Channel(0), &mut sn.st);
+    }
+    let c = ctx(&w);
+    for grid in [LARGE, COMPACT] {
+        let mut app = App::new(grid, true);
+        // Channels, past "Add #channel", open.
+        press(
+            &mut app,
+            &c,
+            &[Click(A), Click(A), Long(A), Click(A), Long(A)],
+        );
+        draw_panel(&mut app, grid, &c);
+        let texts = body_texts(&app);
+        for want in [
+            "Public",
+            "Channel · slot 0",
+            "0 unread",
+            "Notifies like a direct message",
+            "Messages",
+            "Write",
+            "Mute",
+            "Remove",
+        ] {
+            assert!(
+                texts.iter().any(|t| t.contains(want)),
+                "{want:?} missing from {texts:?}"
+            );
+        }
+    }
+    // Muted: the page says so, and the tile offers the way back.
+    let muted = w.nodes[0].dev.node.prefs.ui.with_muted(0, true);
+    {
+        let sn = &mut w.nodes[0];
+        sn.dev.set_ui(muted, &mut sn.st);
+    }
+    let c = ctx(&w);
+    let mut app = App::new(LARGE, true);
+    press(
+        &mut app,
+        &c,
+        &[Click(A), Click(A), Long(A), Click(A), Long(A)],
+    );
+    draw_panel(&mut app, LARGE, &c);
+    let texts = body_texts(&app);
+    assert!(texts.iter().any(|t| t == "Unmute"), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("Muted")), "{texts:?}");
+}
+
+/// A menu's top items carry an icon, a settings page starts at the margin, and a picker marks
+/// the current value with a check.
+#[test]
+fn menus_and_pickers_are_pixel_lists() {
+    use mc_ui::scene::{Icon, Item};
+    let w = world();
+    let c = ctx(&w);
+    let scene_of = |gestures: &[Gesture]| {
+        let mut app = App::new(LARGE, true);
+        press(&mut app, &c, gestures);
+        draw_panel(&mut app, LARGE, &c);
+        match body_overlays(&app).as_slice() {
+            [overlay::Overlay::Scene { scene, .. }] => scene.clone(),
+            other => panic!("{gestures:?}: {other:?}"),
+        }
+    };
+    let icons = |sc: &mc_ui::scene::Scene| -> Vec<Icon> {
+        sc.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Icon { icon, .. } => Some(*icon),
+                _ => None,
+            })
+            .collect()
+    };
+    let x_of = |sc: &mc_ui::scene::Scene, text: &str| {
+        sc.items.iter().find_map(|i| match i {
+            Item::Text { x, text: t, .. } if t == text => Some(*x),
+            _ => None,
+        })
+    };
+    let settings = scene_of(&[Double(A), Long(A)]);
+    assert_eq!(
+        icons(&settings).first().copied(),
+        Some(Icon::Broadcast),
+        "Radio's icon"
+    );
+    assert!(icons(&settings).len() >= 6, "{:?}", icons(&settings));
+    assert_eq!(x_of(&settings, "Radio"), Some(32), "past the icon");
+    let display = scene_of(&[
+        Double(A),
+        Long(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Long(A),
+    ]);
+    assert!(icons(&display).is_empty());
+    assert_eq!(x_of(&display, "Text size"), Some(8), "at the margin");
+    let picker = scene_of(&[
+        Double(A),
+        Long(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Click(A),
+        Long(A),
+        Long(A),
+    ]);
+    assert_eq!(icons(&picker), vec![Icon::Check], "the current value only");
+    assert_eq!(
+        x_of(&picker, "Large (25×15)"),
+        x_of(&picker, "Compact (33×20)"),
+        "aligned past the check"
+    );
+}
+
+/// On the panel the hold-to-confirm popup is a card over the faded screen, which stays drawn
+/// in pixels under it; its bar fills while A is held.
+#[test]
+fn the_confirm_popup_is_a_card_over_the_faded_screen() {
+    use mc_ui::scene::Item;
+    let w = world();
+    let c = ctx(&w);
+    for grid in [LARGE, COMPACT] {
+        let mut app = App::new(grid, true);
+        // Settings → System (last) → Reboot (third).
+        press(
+            &mut app,
+            &c,
+            &[
+                Double(A),
+                Long(A),
+                Double(A),
+                Long(A),
+                Click(A),
+                Click(A),
+                Long(A),
+            ],
+        );
+        assert!(app.popup().is_some());
+        draw_panel(&mut app, grid, &c);
+        let body = body_overlays(&app);
+        let [
+            overlay::Overlay::Scene { scene: under, .. },
+            overlay::Overlay::Over { scene, .. },
+        ] = body.as_slice()
+        else {
+            panic!("the menu, then the card: {body:?}");
+        };
+        assert!(under.texts().contains(&"Reboot"), "the menu is still there");
+        assert!(scene.items.iter().any(|i| matches!(i, Item::Dither { .. })));
+        let texts = scene.texts();
+        for want in [
+            "Reboot",
+            "Restart the device.",
+            "Hold A to confirm",
+            "2.0 s",
+        ] {
+            assert!(texts.contains(&want), "{want:?} not in {texts:?}");
+        }
+        let filled = |sc: &mc_ui::scene::Scene| {
+            sc.items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Rect {
+                        w,
+                        h: 9,
+                        fill: Some(true),
+                        ..
+                    } => Some(*w),
+                    _ => None,
+                })
+                .next()
+        };
+        assert_eq!(filled(scene), None, "an empty bar");
+        // Half the hold: half the bar, and the time left.
+        press(&mut app, &c, &[Held(A, 1000)]);
+        draw_panel(&mut app, grid, &c);
+        let body = body_overlays(&app);
+        let Some(overlay::Overlay::Over { scene, .. }) = body.last() else {
+            panic!("no card: {body:?}");
+        };
+        assert!(scene.texts().contains(&"1.0 s"), "{:?}", scene.texts());
+        let bar = filled(scene).expect("a bar");
+        assert!((80..=95).contains(&bar), "about half of 169: {bar}");
     }
 }
 
@@ -666,9 +901,10 @@ fn the_banner_is_a_card_over_the_faded_screen() {
         outgoing: false,
     };
     for grid in [LARGE, COMPACT] {
+        // Over Home (pixels), and over a tool page (text): Tools → Heard nodes.
         for (gestures, under) in [
             (&[][..], 1),
-            (&[Click(A), Click(A), Click(A), Long(A)][..], 0),
+            (&[Click(A), Click(A), Click(A), Long(A), Long(A)][..], 0),
         ] {
             let mut app = App::new(grid, true);
             press(&mut app, &c, gestures);

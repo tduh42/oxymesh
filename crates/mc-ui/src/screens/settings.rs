@@ -13,9 +13,11 @@ use ratatui_widgets::list::ListState;
 
 use super::chat::{Compose, Target};
 use super::menu::{Action, Item, Menu};
+use super::pixel::{Row, rich_list};
 use super::{draw_list, step};
 use crate::act::{Intent, Outcome};
 use crate::app::{BleState, Confirm, Input, Nav, Screen, Ui};
+use crate::scene::{Icon, Scene};
 use crate::{clock, regions};
 
 fn prefs<'a>(ui: &Ui<'a>) -> &'a Prefs {
@@ -83,6 +85,21 @@ impl Screen for Choice {
             })
             .collect();
         draw_list(f, body, &rows, &mut self.state, ui);
+    }
+
+    /// On the panel: the options as a pixel list, a check mark in front of the current one.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let rows: Vec<Row> = self
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, (label, _))| {
+                let mark = (Some(i) == self.current).then_some(Icon::Check);
+                Row::item(mark, label, String::new())
+            })
+            .collect();
+        let sel = self.state.selected().unwrap_or(0);
+        Some(rich_list(ui, w, h, &rows, sel))
     }
 
     fn input(&mut self, input: Input, _ui: &Ui<'_>) -> Nav {

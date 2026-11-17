@@ -9,9 +9,11 @@ use ratatui_core::layout::Rect;
 use ratatui_core::terminal::Frame;
 use ratatui_widgets::list::ListState;
 
+use super::pixel::{Row, rich_list};
 use super::{Dest, draw_list, open, step};
 use crate::act::Intent;
 use crate::app::{Confirm, Input, Nav, Screen, Ui};
+use crate::scene::{Icon, Scene};
 
 /// What choosing an item does.
 #[derive(Debug, Clone)]
@@ -36,6 +38,8 @@ pub struct Item {
     /// Value shown on the right, computed when drawn.
     pub detail: Option<fn(&Ui<'_>) -> String>,
     pub action: Action,
+    /// On the panel, in front of the label (the top menus have one per item).
+    pub icon: Option<Icon>,
 }
 
 impl Item {
@@ -46,6 +50,11 @@ impl Item {
     pub fn with(label: &'static str, detail: fn(&Ui<'_>) -> String, action: Action) -> Item {
         item_with(label, detail, action)
     }
+
+    const fn icon(mut self, icon: Icon) -> Item {
+        self.icon = Some(icon);
+        self
+    }
 }
 
 const fn item(label: &'static str, action: Action) -> Item {
@@ -53,6 +62,7 @@ const fn item(label: &'static str, action: Action) -> Item {
         label,
         detail: None,
         action,
+        icon: None,
     }
 }
 
@@ -61,6 +71,7 @@ const fn item_with(label: &'static str, detail: fn(&Ui<'_>) -> String, action: A
         label,
         detail: Some(detail),
         action,
+        icon: None,
     }
 }
 
@@ -104,6 +115,17 @@ impl Screen for Menu {
         draw_list(f, body, &rows, &mut self.state, ui);
     }
 
+    /// On the panel: the rows of the pixel lists (ADR-0011), each with its icon if it has one
+    /// and its current value on the right.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let rows: Vec<Row> = self
+            .items
+            .iter()
+            .map(|i| Row::item(i.icon, i.label, i.detail.map(|d| d(ui)).unwrap_or_default()))
+            .collect();
+        Some(rich_list(ui, w, h, &rows, self.selected()))
+    }
+
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {
         if !step(&mut self.state, self.items.len(), input) {
             return Nav::Stay;
@@ -138,16 +160,16 @@ pub fn tools() -> Menu {
     Menu::new(
         "Tools",
         &[
-            item("Heard nodes", Action::Open(Dest::Heard)),
-            item("Discover", Action::Open(Dest::Discover)),
-            item("Trace route", Action::Open(Dest::TracePick)),
-            item("Ping & range", Action::Open(Dest::RangePick)),
-            item("Signal", Action::Open(Dest::Signal)),
-            item("Packet log", Action::Open(Dest::Packets)),
-            item("Airtime", Action::Open(Dest::Airtime)),
-            item("Repeater admin", Action::Open(Dest::AdminPick)),
-            item("GPS", Action::Open(Dest::Gps)),
-            item("Map", Action::Open(Dest::Map)),
+            item("Heard nodes", Action::Open(Dest::Heard)).icon(Icon::Eye),
+            item("Discover", Action::Open(Dest::Discover)).icon(Icon::Search),
+            item("Trace route", Action::Open(Dest::TracePick)).icon(Icon::Route),
+            item("Ping & range", Action::Open(Dest::RangePick)).icon(Icon::Pulse),
+            item("Signal", Action::Open(Dest::Signal)).icon(Icon::Signal),
+            item("Packet log", Action::Open(Dest::Packets)).icon(Icon::List),
+            item("Airtime", Action::Open(Dest::Airtime)).icon(Icon::Clock),
+            item("Repeater admin", Action::Open(Dest::AdminPick)).icon(Icon::Tools),
+            item("GPS", Action::Open(Dest::Gps)).icon(Icon::Pin),
+            item("Map", Action::Open(Dest::Map)).icon(Icon::Map),
         ],
     )
 }
@@ -156,20 +178,21 @@ pub fn settings() -> Menu {
     Menu::new(
         "Settings",
         &[
-            item_with("Radio", radio, Action::Open(Dest::Radio)),
-            item_with("Identity", name, Action::Open(Dest::Identity)),
-            item("Bluetooth", Action::Open(Dest::Bluetooth)),
-            item("Contacts", Action::Open(Dest::ContactSettings)),
-            item("Display", Action::Open(Dest::Display)),
-            item("Notifications", Action::Open(Dest::Notifications)),
-            item("Telemetry", Action::Open(Dest::Telemetry)),
-            item("Power", Action::Open(Dest::Power)),
+            item_with("Radio", radio, Action::Open(Dest::Radio)).icon(Icon::Broadcast),
+            item_with("Identity", name, Action::Open(Dest::Identity)).icon(Icon::Person),
+            item("Bluetooth", Action::Open(Dest::Bluetooth)).icon(Icon::Bluetooth),
+            item("Contacts", Action::Open(Dest::ContactSettings)).icon(Icon::People),
+            item("Display", Action::Open(Dest::Display)).icon(Icon::Monitor),
+            item("Notifications", Action::Open(Dest::Notifications)).icon(Icon::Bell),
+            item("Telemetry", Action::Open(Dest::Telemetry)).icon(Icon::Graph),
+            item("Power", Action::Open(Dest::Power)).icon(Icon::Power),
             item_with(
                 "Time",
                 |ui| super::settings::utc(ui.ctx.dev.node.prefs.ui.tz_offset_min),
                 Action::Open(Dest::Time),
-            ),
-            item("System", Action::Open(Dest::System)),
+            )
+            .icon(Icon::Clock),
+            item("System", Action::Open(Dest::System)).icon(Icon::Settings),
         ],
     )
 }

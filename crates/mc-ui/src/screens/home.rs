@@ -263,13 +263,13 @@ impl Screen for Home {
         }
         // The launcher: 3 × 2 tiles.
         let sel = self.state.selected().unwrap_or(0) % LAUNCHER.len();
-        let tw = (w - 8 - 4) / 3;
+        let (tw, tile_x) = super::pixel::tile_columns(w, 3);
         let th = 33u16;
         let new = dev.unread_alerting();
         for (i, (label, d, icon)) in LAUNCHER.iter().enumerate() {
             let (col, row) = (i as i16 % 3, i as i16 / 3);
-            let x = 4 + col * (tw as i16 + 2);
-            let y = cy + ch as i16 + 4 + row * (th as i16 + 2);
+            let x = tile_x(col);
+            let y = cy + ch as i16 + 4 + row * (th as i16 + super::pixel::TILE_GAP);
             let count = if *d == Dest::Messages { new } else { 0 };
             super::pixel::tile(&mut sc, x, y, tw, th, *icon, label, count, i == sel);
         }

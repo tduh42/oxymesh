@@ -109,6 +109,14 @@ pub enum Icon {
     Plus,
     Warning,
     Refresh,
+    Search,
+    Map,
+    List,
+    Monitor,
+    Power,
+    Eye,
+    Graph,
+    Pulse,
 }
 
 impl Icon {
@@ -141,6 +149,14 @@ impl Icon {
             Icon::Plus => 234,
             Icon::Warning => 280,
             Icon::Refresh => 243,
+            Icon::Search => 207,
+            Icon::Map => 208,
+            Icon::List => 199,
+            Icon::Monitor => 222,
+            Icon::Power => 235,
+            Icon::Eye => 165,
+            Icon::Graph => 176,
+            Icon::Pulse => 238,
         }
     }
 }

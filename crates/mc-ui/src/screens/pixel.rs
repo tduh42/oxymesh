@@ -7,6 +7,10 @@ use crate::app::Ui;
 use crate::panel::COMPACT;
 use crate::scene::{self, Align, Font, Icon, IconSize, Scene};
 
+/// Left margin of text that starts a line on a pixel screen (lists without badges, notes,
+/// cards).
+pub const MARGIN: i16 = 8;
+
 /// Fonts and row heights by text size: large (default) or compact (smaller text, more rows).
 #[derive(Debug, Clone, Copy)]
 pub struct Sizes {
@@ -97,6 +101,18 @@ pub struct Row {
 }
 
 impl Row {
+    /// A one-line row of a menu or a picker: a label, its value on the right, an icon or none.
+    pub fn item(icon: Option<Icon>, label: &str, value: String) -> Self {
+        Self {
+            badge: icon.map(Badge::Icon),
+            title: String::from(label),
+            bold: false,
+            right: value,
+            sub: None,
+            dot: Dot::None,
+        }
+    }
+
     /// A one-line row: an icon and a label (`+ New message`).
     pub fn action(icon: Icon, label: &str) -> Self {
         Self {
@@ -130,6 +146,9 @@ pub fn rich_list(ui: &Ui<'_>, w: u16, h: u16, rows: &[Row], selected: usize) -> 
         }
         first += 1;
     }
+    // A list with no badge at all (a settings page) starts at the margin; one badge anywhere
+    // (the current choice's check mark) keeps every row aligned past it.
+    let badges = rows.iter().any(|r| r.badge.is_some());
     let mut sc = Scene::new();
     let mut y = 0i16;
     for (i, r) in rows.iter().enumerate().skip(first) {
@@ -142,7 +161,11 @@ pub fn rich_list(ui: &Ui<'_>, w: u16, h: u16, rows: &[Row], selected: usize) -> 
         if sel {
             sc.rect(0, y, w as u16, rh as u16, 0, Some(true), None);
         }
-        let left = 4 + s.badge as i16 + 6;
+        let left = if badges {
+            4 + s.badge as i16 + 6
+        } else {
+            MARGIN
+        };
         let cy = y + rh / 2;
         match &r.badge {
             Some(Badge::Initials(t)) => {
@@ -213,6 +236,19 @@ pub fn rich_list(ui: &Ui<'_>, w: u16, h: u16, rows: &[Row], selected: usize) -> 
         }
     }
     sc
+}
+
+/// Gap between two tiles, and between the tiles and the body's edges (twice).
+pub const TILE_GAP: i16 = 2;
+
+/// The width of a tile and the x of each column, for `columns` tiles across a `w`-wide body
+/// (Home's launcher and a contact's actions: 3; a channel's: 2).
+pub fn tile_columns(w: u16, columns: u16) -> (u16, impl Fn(i16) -> i16) {
+    let gaps = 2 * TILE_GAP as u16 * 2 + (columns.max(1) - 1) * TILE_GAP as u16;
+    let tw = w.saturating_sub(gaps) / columns.max(1);
+    (tw, move |col: i16| {
+        2 * TILE_GAP + col * (tw as i16 + TILE_GAP)
+    })
 }
 
 /// An icon tile with its label, reversed when selected, with a count badge if `count` > 0.

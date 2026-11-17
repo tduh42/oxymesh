@@ -669,8 +669,8 @@ impl App {
             w: u32::from(cells.width) * cw,
             h: u32::from(cells.height) * ch,
         };
-        // A banner keeps the screen's own drawing: it fades under the card.
-        let body_scene = if self.panel && self.popup.is_none() {
+        // A banner or a popup keeps the screen's own drawing: it fades under the card.
+        let body_scene = if self.panel {
             let at = px(areas.body);
             top.scene(at.w as u16, at.h as u16, &ui)
                 .map(|scene| (at, scene))
@@ -745,7 +745,14 @@ impl App {
             });
         }
         if let Some(p) = &self.popup {
-            draw_confirm(f, areas.body, p, &ui);
+            if self.panel {
+                // On the panel: a card over the faded screen, pixels or text alike.
+                let at = px(areas.body);
+                let scene = confirm_scene(at.w as u16, at.h as u16, p);
+                self.overlays.push(Overlay::Over { at, scene });
+            } else {
+                draw_confirm(f, areas.body, p, &ui);
+            }
         } else if let Some(seq) = self.banner {
             let rows = draw_banner(f, areas.body, seq, &ui);
             if self.panel {
@@ -927,6 +934,75 @@ fn banner_scene(w: u16, h: u16, blank: i16, seq: u32, ui: &Ui<'_>) -> Option<Sce
         );
     }
     Some(sc)
+}
+
+/// The hold-to-confirm popup on the panel: a card in the middle of the faded screen, with
+/// what will happen, and a bar that fills while A is held.
+fn confirm_scene(w: u16, h: u16, p: &Confirm) -> Scene {
+    use crate::scene::{self, Align, Font, Icon, IconSize};
+    let mut sc = Scene::new();
+    sc.dither(0, 0, w, h);
+    let (x, cw) = (6i16, w.saturating_sub(15));
+    let inner = cw as i16 - 16;
+    let lines = scene::wrap(Font::R10, &p.text, inner);
+    let n = lines.len().clamp(1, 4) as i16;
+    // The title, the text, then the hint and the bar.
+    let text_top = 39i16;
+    let chh = (text_top + 13 * n + 28) as u16;
+    let y = ((h as i16 - chh as i16) / 2 - 2).max(2);
+    // A shadow, then the card.
+    sc.rect(x + 3, y + 3, cw, chh, 6, Some(true), None);
+    sc.rect(x, y, cw, chh, 6, Some(false), Some(true));
+    sc.rect(x + 1, y + 1, cw - 2, chh - 2, 5, None, Some(true));
+    sc.icon(x + 8, y + 7, Icon::Warning, IconSize::S16, true);
+    sc.text(
+        x + 30,
+        y + 20,
+        Font::B12,
+        Align::Left,
+        true,
+        &scene::ellipsize(Font::B12, &p.title, inner - 22),
+    );
+    for (i, l) in lines.iter().take(4).enumerate() {
+        let l = if i == 3 && lines.len() > 4 {
+            scene::ellipsize(Font::R10, &format!("{l} ..."), inner)
+        } else {
+            l.clone()
+        };
+        sc.text(
+            x + 8,
+            y + text_top + 13 * i as i16,
+            Font::R10,
+            Align::Left,
+            true,
+            &l,
+        );
+    }
+    let by = y + text_top + 13 * n;
+    let left = CONFIRM_MS.saturating_sub(p.held_ms);
+    sc.text(
+        x + 8,
+        by + 6,
+        Font::R8,
+        Align::Left,
+        true,
+        "Hold A to confirm",
+    );
+    sc.text(
+        x + cw as i16 - 8,
+        by + 6,
+        Font::R8,
+        Align::Right,
+        true,
+        &format!("{}.{} s", left / 1000, left % 1000 / 100),
+    );
+    let bar = cw.saturating_sub(16);
+    sc.rect(x + 8, by + 11, bar, 9, 3, None, Some(true));
+    let filled = (u32::from(bar) * p.held_ms.min(CONFIRM_MS) / CONFIRM_MS) as u16;
+    if filled > 0 {
+        sc.rect(x + 8, by + 11, filled.max(4), 9, 3, Some(true), None);
+    }
+    sc
 }
 
 /// New direct message: sender and the start of the text, over the top of the body.
