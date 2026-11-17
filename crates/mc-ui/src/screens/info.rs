@@ -285,6 +285,64 @@ impl Screen for ImportCpp {
         );
     }
 
+    /// On the panel: what the C++ firmware left, as labelled values, then what a hold does.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<crate::scene::Scene> {
+        let mut sc = crate::scene::Scene::new();
+        match &self.found {
+            None => {
+                super::pixel::note(
+                    &mut sc,
+                    w,
+                    4,
+                    "Looking for the MeshCore C++ firmware's data…",
+                );
+            }
+            Some(Err(ImportError::NoIdentity)) => {
+                super::pixel::note(
+                    &mut sc,
+                    w,
+                    4,
+                    "No MeshCore C++ data on this device: nothing to import.",
+                );
+            }
+            Some(Err(e)) => {
+                let y = super::pixel::note(&mut sc, w, 4, "The C++ data cannot be read:");
+                super::pixel::note(&mut sc, w, y, &format!("{e:?}"));
+            }
+            Some(Ok(s)) => {
+                let radio = s.radio.map_or(String::from("defaults"), |r| {
+                    format!(
+                        "{}.{:03} MHz SF{} CR{}",
+                        r.freq_khz / 1000,
+                        r.freq_khz % 1000,
+                        r.sf,
+                        r.cr
+                    )
+                });
+                let rows = [
+                    ("Name", name_of(&s.name)),
+                    ("Key", short_key(&s.key)),
+                    ("Contacts", format!("{}", s.contacts)),
+                    ("Channels", format!("{}", s.channels)),
+                    ("Radio", radio),
+                ];
+                let y = super::pixel::fields(&mut sc, w, 0, &rows);
+                let same = s.key == *ui.ctx.dev.node.id.pub_key();
+                super::pixel::note(
+                    &mut sc,
+                    w,
+                    y + 4,
+                    if same {
+                        "This device already has this identity."
+                    } else {
+                        "Hold A: it replaces this device's identity, contacts, channels and settings, then reboots."
+                    },
+                );
+            }
+        }
+        Some(sc)
+    }
+
     fn input(&mut self, input: Input, _ui: &Ui<'_>) -> Nav {
         match (&self.found, input) {
             (Some(Ok(_)), Input::Open) => Nav::Confirm(

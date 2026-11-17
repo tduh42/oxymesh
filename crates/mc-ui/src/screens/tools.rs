@@ -286,6 +286,51 @@ pub struct RangeTest {
 const RANGE_EVERY_MS: u64 = 5_000;
 
 impl RangeTest {
+    /// Answered, round trip, SNR, and whether the test runs.
+    fn values(&self) -> Vec<(&'static str, String)> {
+        let sent = self.results.len();
+        let ok: Vec<&(bool, u32, i8)> = self.results.iter().filter(|r| r.0).collect();
+        let pct = (ok.len() * 100).checked_div(sent).unwrap_or(0);
+        let avg = if ok.is_empty() {
+            0
+        } else {
+            ok.iter().map(|r| r.1).sum::<u32>() / ok.len() as u32
+        };
+        let state = if !self.running {
+            "paused"
+        } else if self.pending.is_some() {
+            "waiting…"
+        } else {
+            "running"
+        };
+        alloc::vec![
+            ("Answered", format!("{}/{sent} {pct}%", ok.len())),
+            (
+                "RTT",
+                match self.results.last() {
+                    Some((true, rtt, _)) => format!(
+                        "{}.{:02} s avg {}.{:02}",
+                        rtt / 1000,
+                        rtt % 1000 / 10,
+                        avg / 1000,
+                        avg % 1000 / 10
+                    ),
+                    Some((false, _, _)) => String::from("lost"),
+                    None => String::from("-"),
+                },
+            ),
+            (
+                "SNR",
+                ok.last()
+                    .map(|r| snr_text(r.2))
+                    .unwrap_or_else(|| String::from("-")),
+            ),
+            ("Test", String::from(state)),
+        ]
+    }
+}
+
+impl RangeTest {
     pub fn new(key: [u8; 32]) -> Self {
         Self {
             key,
@@ -324,48 +369,12 @@ impl Screen for RangeTest {
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         self.collect(ui);
         let w = usize::from(body.width);
-        let sent = self.results.len();
         let ok: Vec<&(bool, u32, i8)> = self.results.iter().filter(|r| r.0).collect();
-        let pct = (ok.len() * 100).checked_div(sent).unwrap_or(0);
-        let avg = if ok.is_empty() {
-            0
-        } else {
-            ok.iter().map(|r| r.1).sum::<u32>() / ok.len() as u32
-        };
-        let last = self.results.last();
-        let state = if !self.running {
-            "paused"
-        } else if self.pending.is_some() {
-            "waiting…"
-        } else {
-            "running"
-        };
-        let l = alloc::vec![
-            chrome::spread("Answered", &format!("{}/{sent} {pct}%", ok.len()), w),
-            chrome::spread(
-                "RTT",
-                &match last {
-                    Some((true, rtt, _)) => format!(
-                        "{}.{:02} s avg {}.{:02}",
-                        rtt / 1000,
-                        rtt % 1000 / 10,
-                        avg / 1000,
-                        avg % 1000 / 10
-                    ),
-                    Some((false, _, _)) => String::from("lost"),
-                    None => String::from("-"),
-                },
-                w,
-            ),
-            chrome::spread(
-                "SNR",
-                &ok.last()
-                    .map(|r| snr_text(r.2))
-                    .unwrap_or_else(|| String::from("-")),
-                w,
-            ),
-            chrome::spread("Test", state, w),
-        ];
+        let l: Vec<String> = self
+            .values()
+            .iter()
+            .map(|(k, v)| chrome::spread(k, v, w))
+            .collect();
         lines_to(f, rows(body, 0, 4), l);
         // Hits and misses, the most recent on the right.
         let strip: String = self
@@ -389,6 +398,27 @@ impl Screen for RangeTest {
             Sparkline::default().data(snr),
             rows(body, 8, body.height.saturating_sub(8)),
         );
+    }
+
+    /// On the panel: the values, the hits and misses as squares, the answers' SNR as bars.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        // The panel draws this instead of `draw`: the answers are collected here too.
+        self.collect(ui);
+        let mut sc = Scene::new();
+        let y = pixel::fields(&mut sc, w, 0, &self.values());
+        let hits: Vec<bool> = self.results.iter().map(|r| r.0).collect();
+        let y = pixel::strip(&mut sc, w, y + 6, &hits);
+        let snr: Vec<u64> = self
+            .results
+            .iter()
+            .filter(|r| r.0)
+            .map(|r| (i64::from(r.2) / 4 + 20).max(0) as u64)
+            .collect();
+        let room = (w as usize - 2 * pixel::MARGIN as usize) / 2;
+        let shown = &snr[snr.len().saturating_sub(room)..];
+        let chart_h = (h as i16 - y - 6 - 13).clamp(16, 60) as u16;
+        pixel::chart(&mut sc, w, y + 4, chart_h, "SNR of the answers", shown);
+        Some(sc)
     }
 
     fn input(&mut self, input: Input, _ui: &Ui<'_>) -> Nav {
@@ -492,34 +522,37 @@ impl Trace {
     }
 }
 
-impl Screen for Trace {
-    fn title(&self, _ui: &Ui<'_>) -> String {
-        String::from("Trace route")
-    }
+const NOTHING_TO_TRACE: &str =
+    "Nothing to trace: this contact is reached directly and does not repeat.";
 
-    fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
-        let w = usize::from(body.width);
-        let Some((code, path)) = self.path(ui) else {
-            f.render_widget(
-                Paragraph::new(
-                    "Nothing to trace: this contact is reached directly and does not repeat.",
-                )
-                .wrap(Wrap { trim: true }),
-                rows(body, 1, body.height.saturating_sub(1)),
-            );
-            return;
-        };
+/// What a trace shows: the hops there and back, then its state or each hop's SNR.
+struct TraceView {
+    head: String,
+    state: Option<&'static str>,
+    /// Who, and the SNR × 4 there; the last is the way back here.
+    hops: Vec<(String, i8)>,
+    round: Option<String>,
+}
+
+impl Trace {
+    fn view(&self, ui: &Ui<'_>) -> Option<TraceView> {
+        let (code, path) = self.path(ui)?;
         let size = 1usize << code;
         let reply = self.tag.and_then(|t| ui.ctx.dev.request_reply(t));
         let hops = path.len() / size;
-        let mut l: Vec<String> = alloc::vec![format!(
-            "{hops} {} there and back",
-            if hops == 1 { "hop" } else { "hops" }
-        )];
+        let mut v = TraceView {
+            head: format!(
+                "{hops} {} there and back",
+                if hops == 1 { "hop" } else { "hops" }
+            ),
+            state: None,
+            hops: Vec::new(),
+            round: None,
+        };
         match reply {
-            None if self.tag.is_some() => l.push(String::from("Tracing…")),
-            None => l.push(String::from("Hold A to trace.")),
-            Some(r) if !r.ok => l.push(String::from("No answer.")),
+            None if self.tag.is_some() => v.state = Some("Tracing…"),
+            None => v.state = Some("Hold A to trace."),
+            Some(r) if !r.ok => v.state = Some("No answer."),
             Some(r) => {
                 // Data: hash count, hashes, SNR per hop passed, final SNR.
                 let d = &r.data;
@@ -527,28 +560,70 @@ impl Screen for Trace {
                 let hashes = d.get(1..1 + n).unwrap_or(&[]);
                 let snrs = d.get(1 + n..d.len().saturating_sub(1)).unwrap_or(&[]);
                 for (i, (h, s)) in hashes.chunks(size).zip(snrs.iter()).enumerate() {
-                    let s4 = *s as i8;
                     let who = name_by_hash(ui, h).unwrap_or_else(|| format!("{}", mc_core::Hex(h)));
-                    l.push(chrome::spread(
-                        &format!("{} {}", i + 1, who),
-                        &format!("{} {}", bars(s4), snr_text(s4)),
-                        w,
-                    ));
+                    v.hops.push((format!("{} {}", i + 1, who), *s as i8));
                 }
                 let fin = d.last().copied().unwrap_or(0) as i8;
-                l.push(chrome::spread(
-                    "Back here",
-                    &format!("{} {}", bars(fin), snr_text(fin)),
-                    w,
-                ));
-                l.push(format!(
+                v.hops.push((String::from("Back here"), fin));
+                v.round = Some(format!(
                     "Round trip {}.{:02} s",
                     r.rtt_ms / 1000,
                     r.rtt_ms % 1000 / 10
                 ));
             }
         }
+        Some(v)
+    }
+}
+
+impl Screen for Trace {
+    fn title(&self, _ui: &Ui<'_>) -> String {
+        String::from("Trace route")
+    }
+
+    fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
+        let w = usize::from(body.width);
+        let Some(v) = self.view(ui) else {
+            f.render_widget(
+                Paragraph::new(NOTHING_TO_TRACE).wrap(Wrap { trim: true }),
+                rows(body, 1, body.height.saturating_sub(1)),
+            );
+            return;
+        };
+        let mut l: Vec<String> = alloc::vec![v.head];
+        l.extend(v.state.map(String::from));
+        for (who, s4) in &v.hops {
+            l.push(chrome::spread(
+                who,
+                &format!("{} {}", bars(*s4), snr_text(*s4)),
+                w,
+            ));
+        }
+        l.extend(v.round);
         lines_to(f, body, l);
+    }
+
+    /// On the panel: how many hops, then each hop's SNR as labelled values, and the round trip.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let Some(v) = self.view(ui) else {
+            pixel::note(&mut sc, w, 4, NOTHING_TO_TRACE);
+            return Some(sc);
+        };
+        let mut y = pixel::note(&mut sc, w, 0, &v.head);
+        if let Some(state) = v.state {
+            y = pixel::note(&mut sc, w, y, state);
+        }
+        let hops: Vec<(String, String)> = v
+            .hops
+            .iter()
+            .map(|(who, s4)| (who.clone(), snr_text(*s4)))
+            .collect();
+        y = pixel::fields(&mut sc, w, y + 2, &hops);
+        if let Some(round) = v.round {
+            pixel::note(&mut sc, w, y, &round);
+        }
+        Some(sc)
     }
 
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {
@@ -1005,6 +1080,53 @@ impl Screen for Gps {
             &mut self.state,
             ui,
         );
+    }
+
+    /// On the panel: the fix (or the search), the position shared in adverts, then "Share this
+    /// position" and the contacts by distance.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let c = ui.ctx;
+        let p = &c.dev.node.prefs;
+        let mut sc = Scene::new();
+        let mut values: Vec<(&str, String)> = Vec::new();
+        let mut y = 0;
+        match (c.gps, c.dev.gps_active(), c.gps_searching) {
+            (Some(g), _, _) => {
+                values.push(("Fix", format!("{} satellites", g.satellites)));
+                values.push(("Lat", geo::coord(g.lat, true)));
+                values.push(("Lon", geo::coord(g.lon, false)));
+            }
+            (None, false, _) => y = pixel::note(&mut sc, w, 0, "GPS off."),
+            (None, true, Some(n)) => values.push(("Searching", format!("{n} satellites"))),
+            (None, true, None) => y = pixel::note(&mut sc, w, 0, "Waiting for a fix…"),
+        }
+        let shared = if p.lat == 0 && p.lon == 0 {
+            "none"
+        } else {
+            "set"
+        };
+        values.push(("Shared position", String::from(shared)));
+        let y = pixel::fields(&mut sc, w, y, &values) + 2;
+        let mut rows_: Vec<Row> = Vec::new();
+        if c.gps.is_some() {
+            rows_.push(Row::action(Icon::Pin, "Share this position"));
+        }
+        if let Some(me) = my_position(ui) {
+            for (name, d, b) in by_distance(ui, me) {
+                rows_.push(Row::item(
+                    None,
+                    &name,
+                    format!("{} {}", geo::distance_text(d), geo::compass(b)),
+                ));
+            }
+        }
+        if !rows_.is_empty() {
+            sc.hline(0, w as i16 - 1, y - 1);
+            let sel = self.state.selected().unwrap_or(0).min(rows_.len() - 1);
+            let list = rich_list(ui, w, h.saturating_sub(y as u16), &rows_, sel);
+            sc.append(list, 0, y);
+        }
+        Some(sc)
     }
 
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {

@@ -15,11 +15,13 @@ use ratatui_widgets::list::ListState;
 use ratatui_widgets::paragraph::{Paragraph, Wrap};
 
 use super::chat::{Compose, Target};
+use super::pixel::{self, Row};
 use super::tools::bars;
 use super::{draw_list, name_of, rows, short_key, step};
 use crate::act::{Intent, Outcome};
 use crate::app::{Input, Nav, Screen, Ui};
 use crate::chrome::{self, Footer};
+use crate::scene::{Icon, Scene};
 
 /// At most one discovery every 5 s (`docs/spec/ui.md` §6).
 const DISCOVER_EVERY_MS: u64 = 5_000;
@@ -75,6 +77,16 @@ pub struct Discover {
     last_ms: Option<u64>,
 }
 
+impl Discover {
+    fn head(&self, found: usize) -> String {
+        match (self.last_ms, found) {
+            (None, _) => String::from("Hold A to find the repeaters within direct reach."),
+            (Some(_), 0) => String::from("Searching… nothing yet."),
+            (Some(_), n) => format!("{n} found. SNR in dB: theirs/ours."),
+        }
+    }
+}
+
 fn found(ui: &Ui<'_>) -> Vec<Discovered> {
     let mut v: Vec<Discovered> = ui.ctx.dev.discovered().to_vec();
     v.sort_by_key(|d| core::cmp::Reverse(d.snr_back));
@@ -88,11 +100,7 @@ impl Screen for Discover {
 
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let list = found(ui);
-        let head = match (self.last_ms, list.len()) {
-            (None, _) => String::from("Hold A to find the repeaters within direct reach."),
-            (Some(_), 0) => String::from("Searching… nothing yet."),
-            (Some(_), n) => format!("{n} found. SNR in dB: theirs/ours."),
-        };
+        let head = self.head(list.len());
         f.render_widget(
             Paragraph::new(head).wrap(Wrap { trim: true }),
             rows(body, 0, 2),
@@ -119,6 +127,35 @@ impl Screen for Discover {
             &mut self.state,
             ui,
         );
+    }
+
+    /// On the panel: the note, then a row per repeater with the SNR both ways.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let list = found(ui);
+        let rows_: Vec<Row> = list
+            .iter()
+            .map(|d| {
+                let prefix = d.key.get(..usize::from(d.key_len)).unwrap_or(&[]);
+                Row::item(
+                    Some(Icon::Broadcast),
+                    &name_for(ui, prefix),
+                    format!("{}/{} dB", d.snr_there / 4, d.snr_back / 4),
+                )
+            })
+            .collect();
+        let sel = self
+            .state
+            .selected()
+            .unwrap_or(0)
+            .min(rows_.len().saturating_sub(1));
+        Some(pixel::headed_list(
+            ui,
+            w,
+            h,
+            &self.head(list.len()),
+            &rows_,
+            sel,
+        ))
     }
 
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {
@@ -177,6 +214,16 @@ impl Admin {
         }
     }
 
+    fn state_text(&self, ui: &Ui<'_>) -> &'static str {
+        match (self.login, self.logged(ui)) {
+            (Login::No, _) => "Not logged in.",
+            (_, None) => "Logging in…",
+            (_, Some(Ok(true))) => "Logged in as admin.",
+            (_, Some(Ok(false))) => "Logged in as guest.",
+            (_, Some(Err(()))) => "Login failed: wrong password or no answer.",
+        }
+    }
+
     /// `Some(true)`: logged in as admin, `Some(false)`: as guest; `None`: not (yet).
     fn logged(&self, ui: &Ui<'_>) -> Option<Result<bool, ()>> {
         let Login::Waiting(tag) = self.login else {
@@ -198,13 +245,7 @@ impl Screen for Admin {
     }
 
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
-        let state = match (self.login, self.logged(ui)) {
-            (Login::No, _) => String::from("Not logged in."),
-            (_, None) => String::from("Logging in…"),
-            (_, Some(Ok(true))) => String::from("Logged in as admin."),
-            (_, Some(Ok(false))) => String::from("Logged in as guest."),
-            (_, Some(Err(()))) => String::from("Login failed: wrong password or no answer."),
-        };
+        let state = self.state_text(ui);
         f.render_widget(
             Paragraph::new(state).wrap(Wrap { trim: true }),
             rows(body, 0, 2),
@@ -220,6 +261,25 @@ impl Screen for Admin {
             &mut self.state,
             ui,
         );
+    }
+
+    /// On the panel: the login state, then the four actions with their icons.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let icons = [Icon::Person, Icon::Lock, Icon::Graph, Icon::People];
+        let rows_: Vec<Row> = ADMIN_ACTS
+            .iter()
+            .zip(icons)
+            .map(|(a, i)| Row::item(Some(i), a, String::new()))
+            .collect();
+        let sel = self.state.selected().unwrap_or(0);
+        Some(pixel::headed_list(
+            ui,
+            w,
+            h,
+            self.state_text(ui),
+            &rows_,
+            sel,
+        ))
     }
 
     fn input(&mut self, input: Input, _ui: &Ui<'_>) -> Nav {
@@ -274,6 +334,54 @@ fn duration(s: u32) -> String {
     }
 }
 
+const ASKING: &str = "Asking…";
+const NO_ANSWER: &str = "No answer. Log in first, then try again.";
+
+impl RepeaterStatus {
+    /// The repeater's status as labelled values, or why there is none yet.
+    fn answer(&self, ui: &Ui<'_>) -> Result<Vec<(&'static str, String)>, &'static str> {
+        let r = self
+            .tag
+            .and_then(|t| ui.ctx.dev.request_reply(t))
+            .ok_or(ASKING)?;
+        if !r.ok {
+            return Err(NO_ANSWER);
+        }
+        // RepeaterStats (`simple_repeater/MyMesh.h:44-60`), little-endian.
+        let d = &r.data;
+        let mv = le16(d, 0);
+        Ok(alloc::vec![
+            ("Battery", format!("{}.{:02} V", mv / 1000, mv % 1000 / 10)),
+            ("Up", duration(le32(d, 20))),
+            ("Queue", format!("{}", le16(d, 2))),
+            ("Noise floor", format!("{} dBm", le16(d, 4) as i16)),
+            (
+                "Last",
+                format!(
+                    "{} dB {} dBm",
+                    snr1(le16(d, 42) as i16 as i8),
+                    le16(d, 6) as i16
+                ),
+            ),
+            ("Received", format!("{}", le32(d, 8))),
+            ("Sent", format!("{}", le32(d, 12))),
+            (
+                "Airtime TX/RX",
+                format!("{}/{} s", le32(d, 16), le32(d, 48))
+            ),
+            (
+                "Duplicates",
+                format!("{}", u32::from(le16(d, 44)) + u32::from(le16(d, 46))),
+            ),
+            ("Errors", format!("{}", le32(d, 52))),
+            (
+                "Answer",
+                format!("{}.{:02} s", r.rtt_ms / 1000, r.rtt_ms % 1000 / 10),
+            ),
+        ])
+    }
+}
+
 impl Screen for RepeaterStatus {
     fn title(&self, _ui: &Ui<'_>) -> String {
         String::from("Repeater status")
@@ -281,61 +389,34 @@ impl Screen for RepeaterStatus {
 
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let w = usize::from(body.width);
-        let reply = self.tag.and_then(|t| ui.ctx.dev.request_reply(t));
-        let Some(r) = reply else {
-            f.render_widget(Paragraph::new("Asking…"), rows(body, 1, 1));
-            return;
-        };
-        if !r.ok {
-            f.render_widget(
-                Paragraph::new("No answer. Log in first, then try again.")
-                    .wrap(Wrap { trim: true }),
+        match self.answer(ui) {
+            Err(ASKING) => f.render_widget(Paragraph::new(ASKING), rows(body, 1, 1)),
+            Err(note) => f.render_widget(
+                Paragraph::new(note).wrap(Wrap { trim: true }),
                 rows(body, 1, 2),
-            );
-            return;
+            ),
+            Ok(l) => {
+                let lines: Vec<Line<'_>> = l
+                    .iter()
+                    .map(|(k, v)| Line::from(chrome::spread(k, v, w)))
+                    .collect();
+                f.render_widget(Paragraph::new(lines), body);
+            }
         }
-        // RepeaterStats (`simple_repeater/MyMesh.h:44-60`), little-endian.
-        let d = &r.data;
-        let mv = le16(d, 0);
-        let l = alloc::vec![
-            chrome::spread(
-                "Battery",
-                &format!("{}.{:02} V", mv / 1000, mv % 1000 / 10),
-                w
-            ),
-            chrome::spread("Up", &duration(le32(d, 20)), w),
-            chrome::spread("Queue", &format!("{}", le16(d, 2)), w),
-            chrome::spread("Noise floor", &format!("{} dBm", le16(d, 4) as i16), w),
-            chrome::spread(
-                "Last",
-                &format!(
-                    "{} dB {} dBm",
-                    snr1(le16(d, 42) as i16 as i8),
-                    le16(d, 6) as i16
-                ),
-                w,
-            ),
-            chrome::spread("Received", &format!("{}", le32(d, 8)), w),
-            chrome::spread("Sent", &format!("{}", le32(d, 12)), w),
-            chrome::spread(
-                "Airtime TX/RX",
-                &format!("{}/{} s", le32(d, 16), le32(d, 48)),
-                w
-            ),
-            chrome::spread(
-                "Duplicates",
-                &format!("{}", u32::from(le16(d, 44)) + u32::from(le16(d, 46))),
-                w
-            ),
-            chrome::spread("Errors", &format!("{}", le32(d, 52)), w),
-            chrome::spread(
-                "Answer",
-                &format!("{}.{:02} s", r.rtt_ms / 1000, r.rtt_ms % 1000 / 10),
-                w
-            ),
-        ];
-        let lines: Vec<Line<'_>> = l.into_iter().map(Line::from).collect();
-        f.render_widget(Paragraph::new(lines), body);
+    }
+
+    /// On the panel: the same values, or the note.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        match self.answer(ui) {
+            Ok(l) => {
+                pixel::fields(&mut sc, w, 0, &l);
+            }
+            Err(note) => {
+                pixel::note(&mut sc, w, 4, note);
+            }
+        }
+        Some(sc)
     }
 
     fn result(&mut self, intent: &Intent, outcome: &Outcome, _ui: &Ui<'_>) -> Nav {
@@ -413,6 +494,50 @@ impl Screen for Neighbours {
             &mut self.state,
             ui,
         );
+    }
+
+    /// On the panel: how many the repeater hears, then a row each with its SNR and age.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let Some(r) = self.tag.and_then(|t| ui.ctx.dev.request_reply(t)) else {
+            pixel::note(&mut sc, w, 4, ASKING);
+            return Some(sc);
+        };
+        if !r.ok {
+            pixel::note(&mut sc, w, 4, NO_ANSWER);
+            return Some(sc);
+        }
+        let d = &r.data;
+        let (total, count) = (le16(d, 0), usize::from(le16(d, 2)));
+        let rows_: Vec<Row> = d
+            .get(4..)
+            .unwrap_or(&[])
+            .as_chunks::<11>()
+            .0
+            .iter()
+            .take(count)
+            .map(|e| {
+                let ago = le32(e, 6);
+                let snr = e.get(10).copied().unwrap_or(0) as i8;
+                let when = if ago < 3600 {
+                    format!("{} min", ago / 60)
+                } else {
+                    format!("{} h", ago / 3600)
+                };
+                Row::item(
+                    None,
+                    &name_for(ui, &e[..6]),
+                    format!("{} dB · {when}", snr1(snr)),
+                )
+            })
+            .collect();
+        let sel = self
+            .state
+            .selected()
+            .unwrap_or(0)
+            .min(rows_.len().saturating_sub(1));
+        let head = format!("{total} heard by the repeater");
+        Some(pixel::headed_list(ui, w, h, &head, &rows_, sel))
     }
 
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {

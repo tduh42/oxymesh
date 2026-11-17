@@ -244,10 +244,11 @@ pub const FIELD_PITCH: i16 = 12;
 /// Labelled values from `y` down, one per row: the label on the left, the value on the right in
 /// bold, a rule between. A value too long for what the label leaves is shortened.
 /// Returns the `y` under the last row.
-pub fn fields(sc: &mut Scene, w: u16, y: i16, rows: &[(&str, String)]) -> i16 {
+pub fn fields<L: AsRef<str>>(sc: &mut Scene, w: u16, y: i16, rows: &[(L, String)]) -> i16 {
     let w = w as i16;
     let mut y = y;
     for (i, (label, value)) in rows.iter().enumerate() {
+        let label = label.as_ref();
         let base = y + FIELD_PITCH - 3;
         sc.text(MARGIN, base, Font::R8, Align::Left, true, label);
         let room = w - MARGIN - 4 - scene::width(Font::R8, label) - 8;
@@ -313,6 +314,43 @@ pub fn note(sc: &mut Scene, w: u16, y: i16, text: &str) -> i16 {
         sc.text(MARGIN, y, Font::R8, Align::Left, true, &l);
     }
     y + 3
+}
+
+/// A note at the top, then a list under it in what is left of the body (a tool that explains
+/// what it shows, then shows it).
+pub fn headed_list(
+    ui: &Ui<'_>,
+    w: u16,
+    h: u16,
+    head: &str,
+    rows: &[Row],
+    selected: usize,
+) -> Scene {
+    let mut sc = Scene::new();
+    let y = if head.is_empty() {
+        0
+    } else {
+        note(&mut sc, w, 0, head) + 2
+    };
+    if !rows.is_empty() {
+        sc.hline(0, w as i16 - 1, y - 1);
+        let list = rich_list(ui, w, h.saturating_sub(y as u16), rows, selected);
+        sc.append(list, 0, y);
+    }
+    sc
+}
+
+/// Hits and misses as a strip of small squares, the most recent on the right (a range test).
+/// Returns the `y` under it.
+pub fn strip(sc: &mut Scene, w: u16, y: i16, hits: &[bool]) -> i16 {
+    const STEP: i16 = 6;
+    let room = (w as i16 - 2 * MARGIN) / STEP;
+    let shown = hits.len().min(room.max(0) as usize);
+    for (i, hit) in hits.iter().skip(hits.len() - shown).enumerate() {
+        let x = MARGIN + i as i16 * STEP;
+        sc.rect(x, y, 5, 5, 0, hit.then_some(true), Some(true));
+    }
+    y + 5
 }
 
 /// Gap between two tiles, and between the tiles and the body's edges (twice).
