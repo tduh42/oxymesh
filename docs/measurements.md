@@ -2,6 +2,18 @@
 
 Log of tests on the real devices. Each entry: date, setup, command, result.
 
+## 2026-11-17 — grey, ghosting e-paper on a second M5
+
+- Setup: a second ThinkNode M5 (board v1.0, node E5651740) moved from MeshCore C++ to oxymesh today; clean under MeshCore. Under oxymesh: a ghost of the previous screen after moving to another screen, and low contrast. The first M5, same firmware, had neither.
+- Refresh times the same on both (`debug-log` `epd:` lines): full 2016 ms against 2007, partial 531 against 542. So the panel did not run a visibly different waveform.
+- A full refresh right after boot was already grey. So every waveform choice was suspect, not only the partial one.
+- 25 °C written into the panel's temperature register instead of its own reading (`0x1A`, LUT loaded without loading the temperature): no change, same 2016 ms.
+- A one-flash test (panel set up again after the peripherals' power, four pairs of full refreshes with RAM 0x26 holding the same image, all white, the inverse, or bypassed): all four looked right on the black blocks.
+- In normal use after that: each card that changed (a partial refresh) turned deep black; everything a partial refresh had not touched stayed grey. On this panel the OTP mode-1 waveform draws a full-screen image grey, and its mode-2 transitions are deep.
+- MeshCore's M5 driver (`GxEPDDisplay.cpp`, companion-v1.18.0, MIT) never runs a full refresh: it clears to white, then draws everything as partial updates. Hence clean under MeshCore.
+- **Fix:** a full refresh is now two steps: the panel cleared to white with mode 1 (2 s, clears ghosts), then the image drawn by a partial refresh from white (0.5 s). The peripherals' rail (PCA9557 IO4) is also switched on before the panel and the radio are set up, which was after before.
+- Result on the second M5: deep black everywhere, no ghost.
+
 ## 2026-11-17 — Bluetooth off and the companion's light sleep (ADR-0014)
 
 - Setup: the M5 on USB, 130 contacts, the phone app paired; `debug-log` builds read with `mc log`.

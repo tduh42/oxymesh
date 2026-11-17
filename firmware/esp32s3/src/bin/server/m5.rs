@@ -125,10 +125,13 @@ pub async fn run(role: Role) -> ! {
     )
     .ok()
     .map(|i2c| Pcf8563::new(i2c.with_sda(p.GPIO2).with_scl(p.GPIO1)));
+    // The peripherals' rail (e-ink, GPS, LoRa) on before any of them is set up
+    // (`docs/measurements.md` 2026-11-17).
     if let Some(io) = io.as_mut() {
         let _ = io.set(pin::LED_ENABLE, true);
+        let _ = io.set(pin::PERIPH_POWER, true);
     }
-    Timer::after(Duration::from_millis(10)).await;
+    Timer::after(Duration::from_millis(20)).await;
 
     // GPS, wired by board revision (`docs/spec/m5.md` §2).
     let highs = (0..10)
@@ -258,9 +261,6 @@ pub async fn run(role: Role) -> ! {
     );
     let _ = epd.init();
     let frames = FRAMES.init([Frame::new(), Frame::new(), Frame::new()]);
-    if let Some(io) = io.as_mut() {
-        let _ = io.set(pin::PERIPH_POWER, true);
-    }
     let pull_up = InputConfig::default().with_pull(Pull::Up);
     let mut btn_a = Input::new(p.GPIO21, pull_up);
     let mut btn_b = Input::new(p.GPIO14, pull_up);
@@ -441,6 +441,10 @@ pub async fn run(role: Role) -> ! {
             while epd.busy() {
                 Timer::after(Duration::from_millis(20)).await;
             }
+            let _ = epd.continue_full(cur);
+            while epd.busy() {
+                Timer::after(Duration::from_millis(20)).await;
+            }
             let _ = epd.sleep();
             radio.sleep();
             if let Some(g) = gps_rx.as_mut() {
@@ -458,6 +462,11 @@ pub async fn run(role: Role) -> ! {
             low.sleep_deep(RtcSleepConfig::deep());
         }
 
+        // A full refresh cleared the panel to white: now the page.
+        if !epd.busy() && epd.full_pending() {
+            let [cur, _, _] = &mut *frames;
+            let _ = epd.continue_full(cur);
+        }
         // The page, at most every 30 s unless a button was pressed.
         if !epd.busy() && now_ms >= next_draw {
             next_draw = now_ms + REDRAW_MS;
@@ -504,6 +513,9 @@ pub async fn run(role: Role) -> ! {
         due.at(radio.next_deadline());
         due.at(next_battery);
         due.at_ms(next_draw);
+        if epd.full_pending() {
+            due.at_ms(now_ms + 20);
+        }
         if let Some(t) = gestures.next_deadline() {
             due.at_ms(t);
         }
@@ -523,7 +535,10 @@ pub async fn run(role: Role) -> ! {
         let deadline = due.get();
         // Power saving (P2): light sleep when nothing is going on, until the server's next
         // job, the battery, the page, at most 30 s.
-        let pending = node.next_wakeup().is_some() || radio.transmitting() || epd.busy();
+        let pending = node.next_wakeup().is_some()
+            || radio.transmitting()
+            || epd.busy()
+            || epd.full_pending();
         // Only the repeater sleeps: the C++ room server keeps the setting and never does
         // (`simple_room_server/main.cpp` has no `board.sleep`).
         if role == Role::Repeater
