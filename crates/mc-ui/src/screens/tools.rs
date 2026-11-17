@@ -19,10 +19,12 @@ use ratatui_widgets::sparkline::Sparkline;
 
 use super::contact::kind_name;
 use super::home::heard_name;
+use super::pixel::{self, Badge, Dot, Row, rich_list};
 use super::{draw_list, name_of, rows, short_key, step};
 use crate::act::{Intent, Outcome};
 use crate::app::{Input, Nav, Screen, Ui};
 use crate::chrome::{self, Footer};
+use crate::scene::{Align, Font, Icon, Scene};
 use crate::{clock, geo, regions, theme};
 
 /// Signal strength as bars, from SNR × 4.
@@ -48,6 +50,17 @@ fn hops_text(h: u8) -> String {
         0 => String::from("direct"),
         1 => String::from("1 hop"),
         n => format!("{n} hops"),
+    }
+}
+
+/// A node's badge by its type: an icon for a repeater, a room or a sensor, initials otherwise
+/// (as in Contacts).
+fn kind_badge(kind: u8, name: &str) -> Badge {
+    match kind {
+        2 => Badge::Icon(Icon::Broadcast),
+        3 => Badge::Icon(Icon::People),
+        4 => Badge::Icon(Icon::Signal),
+        _ => Badge::Initials(pixel::initials(name)),
     }
 }
 
@@ -109,6 +122,41 @@ impl Screen for HeardNodes {
         draw_list(f, body, &rows_, &mut self.state, ui);
     }
 
+    /// On the panel: a row per node, repeaters first, with its route, signal and age.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let c = ui.ctx;
+        let heard = c.dev.heard().sorted();
+        let mut sc = Scene::new();
+        if heard.is_empty() {
+            sc.text(
+                pixel::MARGIN,
+                24,
+                Font::B10,
+                Align::Left,
+                true,
+                "Nothing heard yet.",
+            );
+            pixel::note(&mut sc, w, 28, "Nodes appear when their adverts come in.");
+            return Some(sc);
+        }
+        let rows_: Vec<Row> = heard
+            .iter()
+            .map(|n| {
+                let name = heard_name(ui, n);
+                Row {
+                    badge: Some(kind_badge(n.kind, &name)),
+                    title: name,
+                    bold: false,
+                    right: clock::ago(n.at, c.unix),
+                    sub: Some(format!("{} · {}", hops_text(n.hops), snr_text(n.snr4))),
+                    dot: Dot::None,
+                }
+            })
+            .collect();
+        let sel = self.state.selected().unwrap_or(0).min(rows_.len() - 1);
+        Some(rich_list(ui, w, h, &rows_, sel))
+    }
+
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {
         let heard = ui.ctx.dev.heard().sorted();
         if step(&mut self.state, heard.len(), input)
@@ -147,54 +195,78 @@ impl Screen for HeardDetail {
         let Some(n) = self.node(ui) else {
             return;
         };
-        let c = ui.ctx;
         let w = usize::from(body.width);
-        let mut l = alloc::vec![
-            chrome::spread("Type", kind_name(n.kind), w),
-            chrome::spread("Key", &short_key(&n.key), w),
-            chrome::spread("Route", &hops_text(n.hops), w),
-            chrome::spread(
-                "Signal",
-                &format!("{} {}", bars(n.snr4), snr_text(n.snr4)),
-                w
-            ),
-            chrome::spread(
-                "Heard",
-                &format!(
-                    "{} {}",
-                    n.count,
-                    if n.count == 1 { "time" } else { "times" }
-                ),
-                w,
-            ),
-            chrome::spread("Last", &clock::stamp(n.at, c.unix, c.tz_offset_min), w),
-        ];
-        if let Some(p) = n.location {
-            l.push(chrome::spread("Lat", &geo::coord(p.0, true), w));
-            l.push(chrome::spread("Lon", &geo::coord(p.1, false), w));
-            if let Some(me) = my_position(ui) {
-                let d = geo::distance_m(me, p);
-                let b = geo::bearing_deg(me, p);
-                l.push(chrome::spread(
-                    "From here",
-                    &format!("{} {}", geo::distance_text(d), geo::compass(b)),
-                    w,
-                ));
-            }
-        }
-        let contact = c.dev.node.contacts.find(&n.key).is_some();
+        let (rows_, note) = heard_detail(ui, n);
+        let mut l: Vec<String> = rows_.iter().map(|(k, v)| chrome::spread(k, v, w)).collect();
         l.push(String::new());
-        l.push(String::from(if contact {
-            "In your contacts."
-        } else {
-            "Not in your contacts."
-        }));
+        l.push(String::from(note));
         lines_to(f, body, l);
+    }
+
+    /// On the panel: the badge and name, then the same values.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let Some(n) = self.node(ui) else {
+            sc.text(
+                pixel::MARGIN,
+                24,
+                Font::B10,
+                Align::Left,
+                true,
+                "No longer heard.",
+            );
+            return Some(sc);
+        };
+        let (rows_, note) = heard_detail(ui, n);
+        let y = pixel::fields(&mut sc, w, 0, &rows_);
+        pixel::note(&mut sc, w, y + 2, note);
+        Some(sc)
     }
 
     fn footer(&self, _ui: &Ui<'_>) -> Footer {
         Footer::BACK
     }
+}
+
+/// What is known of a heard node, and whether it is a contact.
+fn heard_detail(ui: &Ui<'_>, n: &HeardNode) -> (Vec<(&'static str, String)>, &'static str) {
+    let c = ui.ctx;
+    let mut l: Vec<(&'static str, String)> = alloc::vec![
+        ("Type", String::from(kind_name(n.kind))),
+        ("Key", short_key(&n.key)),
+        ("Route", hops_text(n.hops)),
+        (
+            "Signal",
+            format!("{} {}", bars(n.snr4).trim_end(), snr_text(n.snr4))
+        ),
+        (
+            "Heard",
+            format!(
+                "{} {}",
+                n.count,
+                if n.count == 1 { "time" } else { "times" }
+            ),
+        ),
+        ("Last", clock::stamp(n.at, c.unix, c.tz_offset_min)),
+    ];
+    if let Some(p) = n.location {
+        l.push(("Lat", geo::coord(p.0, true)));
+        l.push(("Lon", geo::coord(p.1, false)));
+        if let Some(me) = my_position(ui) {
+            let d = geo::distance_m(me, p);
+            let b = geo::bearing_deg(me, p);
+            l.push((
+                "From here",
+                format!("{} {}", geo::distance_text(d), geo::compass(b)),
+            ));
+        }
+    }
+    let note = if c.dev.node.contacts.find(&n.key).is_some() {
+        "In your contacts."
+    } else {
+        "Not in your contacts."
+    };
+    (l, note)
 }
 
 // ------------------------------------------------------------------ ping & range test
@@ -530,6 +602,42 @@ fn name_by_hash(ui: &Ui<'_>, h: &[u8]) -> Option<String> {
 
 // ------------------------------------------------------------------ signal
 
+/// The Signal tool's values: the last packet, the noise floor, the packet rate, and what the
+/// radio chip itself received since boot (readable, and "bad": too weak or too noisy to read,
+/// but something was on the air).
+fn signal_rows(ui: &Ui<'_>) -> Vec<(&'static str, String)> {
+    let dev = ui.ctx.dev;
+    let mins = dev.minutes();
+    let per_min = mins.iter().last().map(|m| m.rx).unwrap_or(0);
+    let hour: u32 = mins.iter().map(|m| u32::from(m.rx)).sum();
+    let mut l = alloc::vec![
+        (
+            "Last",
+            match dev.packets().recent().next() {
+                Some(p) => format!("{} {} dBm", snr_text(p.snr4), p.rssi),
+                None => String::from("-"),
+            },
+        ),
+        ("Noise floor", super::noise_text(dev.noise_floor)),
+        ("Packets", format!("{per_min}/min {hour}/h")),
+    ];
+    if let Some(rx) = ui.ctx.rx {
+        l.push(("Radio", format!("{} ok, {} bad", rx.ok, rx.damaged)));
+    }
+    l
+}
+
+/// The last hour, a value a minute: the noise floor (dBm above −140) and the packets received.
+fn signal_history(ui: &Ui<'_>) -> (Vec<u64>, Vec<u64>) {
+    let mins = ui.ctx.dev.minutes();
+    let noise = mins
+        .iter()
+        .map(|m| (i64::from(m.noise) + 140).max(0) as u64)
+        .collect();
+    let rx = mins.iter().map(|m| u64::from(m.rx)).collect();
+    (noise, rx)
+}
+
 #[derive(Debug)]
 pub struct Signal;
 
@@ -541,31 +649,11 @@ impl Screen for Signal {
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let dev = ui.ctx.dev;
         let w = usize::from(body.width);
-        let last = dev.packets().recent().next();
         let mins: Vec<_> = dev.minutes().iter().copied().collect();
-        let per_min = mins.last().map(|m| m.rx).unwrap_or(0);
-        let hour: u32 = mins.iter().map(|m| u32::from(m.rx)).sum();
-        let mut l = alloc::vec![
-            chrome::spread(
-                "Last",
-                &match last {
-                    Some(p) => format!("{} {} dBm", snr_text(p.snr4), p.rssi),
-                    None => String::from("-"),
-                },
-                w,
-            ),
-            chrome::spread("Noise floor", &super::noise_text(dev.noise_floor), w),
-            chrome::spread("Packets", &format!("{per_min}/min {hour}/h"), w),
-        ];
-        // What the radio chip itself received since boot: packets it could read, and ones too
-        // weak or too noisy ("bad": something was on the air).
-        if let Some(rx) = ui.ctx.rx {
-            l.push(chrome::spread(
-                "Radio",
-                &format!("{} ok, {} bad", rx.ok, rx.damaged),
-                w,
-            ));
-        }
+        let l: Vec<String> = signal_rows(ui)
+            .iter()
+            .map(|(k, v)| chrome::spread(k, v, w))
+            .collect();
         let n = l.len() as u16;
         lines_to(f, rows(body, 0, n), l);
         // The two charts share what is left under the lines and a blank row.
@@ -589,6 +677,18 @@ impl Screen for Signal {
             Sparkline::default().data(rx),
             rows(body, 5 + half, body.height.saturating_sub(5 + half)),
         );
+    }
+
+    /// On the panel: the values, then the last hour as two bar charts.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let y = pixel::fields(&mut sc, w, 0, &signal_rows(ui));
+        let (noise, rx) = signal_history(ui);
+        // Two charts with their titles share the rest of the body.
+        let chart_h = ((h as i16 - y - 4 - 2 * 13) / 2).clamp(16, 48) as u16;
+        let y = pixel::chart(&mut sc, w, y + 2, chart_h, "Noise floor, last hour", &noise);
+        pixel::chart(&mut sc, w, y + 2, chart_h, "Packets a minute", &rx);
+        Some(sc)
     }
 
     fn footer(&self, _ui: &Ui<'_>) -> Footer {
@@ -655,6 +755,44 @@ impl Screen for Packets {
         draw_list(f, body, &rows_, &mut self.state, ui);
     }
 
+    /// On the panel: a line a packet, newest first: time, type, route and hops, its SNR.
+    fn scene(&mut self, w: u16, h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let c = ui.ctx;
+        let rows_: Vec<Row> = c
+            .dev
+            .packets()
+            .recent()
+            .map(|p| {
+                let t = clock::hhmm(clock::local(p.at, c.tz_offset_min));
+                let what = if p.valid {
+                    let route = match p.route {
+                        0 | 1 => "flood",
+                        _ => "direct",
+                    };
+                    format!("{t}  {} · {route} {}", type_name(p.ptype), p.hops)
+                } else {
+                    format!("{t}  ? · {} B", p.len)
+                };
+                Row::item(None, &what, snr_text(p.snr4))
+            })
+            .collect();
+        let mut sc = Scene::new();
+        if rows_.is_empty() {
+            sc.text(
+                pixel::MARGIN,
+                24,
+                Font::B10,
+                Align::Left,
+                true,
+                "No packet yet.",
+            );
+            return Some(sc);
+        }
+        let sel = self.state.selected().unwrap_or(0).min(rows_.len() - 1);
+        sc = rich_list(ui, w, h, &rows_, sel);
+        Some(sc)
+    }
+
     fn input(&mut self, input: Input, ui: &Ui<'_>) -> Nav {
         let n = ui.ctx.dev.packets().recent().count();
         let _ = step(&mut self.state, n, input);
@@ -681,6 +819,43 @@ fn secs(ms: u64) -> String {
     format!("{}.{} s", ms / 1000, ms % 1000 / 100)
 }
 
+const NO_DUTY_RULE: &str = "No duty-cycle rule for this frequency.";
+
+/// The Airtime tool's values.
+fn airtime_rows(ui: &Ui<'_>) -> Vec<(&'static str, String)> {
+    let dev = ui.ctx.dev;
+    let s = dev.node.disp.stats;
+    alloc::vec![
+        ("TX total", secs(s.tx_airtime_ms)),
+        ("RX total", secs(s.rx_airtime_ms)),
+        ("TX last hour", secs(dev.minutes().tx_ms())),
+        ("Queue", format!("{}", dev.tx_queue())),
+        (
+            "Sent / received",
+            format!(
+                "{}/{}",
+                s.sent_flood + s.sent_direct,
+                s.recv_flood + s.recv_direct
+            ),
+        ),
+    ]
+}
+
+/// The share of the last hour spent transmitting, in hundredths of a percent.
+fn duty_used(ui: &Ui<'_>) -> u32 {
+    (ui.ctx.dev.minutes().tx_ms() * 10_000 / 3_600_000) as u32
+}
+
+fn duty_text(used: u32, band: &str, limit: u32) -> String {
+    format!(
+        "Duty {}.{:02}% of {}.{:01}% ({band})",
+        used / 100,
+        used % 100,
+        limit / 100,
+        limit % 100 / 10
+    )
+}
+
 impl Screen for Airtime {
     fn title(&self, _ui: &Ui<'_>) -> String {
         String::from("Airtime")
@@ -689,35 +864,15 @@ impl Screen for Airtime {
     fn draw(&mut self, f: &mut Frame<'_>, body: Rect, ui: &Ui<'_>) {
         let dev = ui.ctx.dev;
         let w = usize::from(body.width);
-        let s = dev.node.disp.stats;
-        let hour_ms = dev.minutes().tx_ms();
-        // Used share of the hour, in hundredths of a percent.
-        let used = (hour_ms * 10_000 / 3_600_000) as u32;
-        let mut l = alloc::vec![
-            chrome::spread("TX total", &secs(s.tx_airtime_ms), w),
-            chrome::spread("RX total", &secs(s.rx_airtime_ms), w),
-            chrome::spread("TX last hour", &secs(hour_ms), w),
-            chrome::spread("Queue", &format!("{}", dev.tx_queue()), w),
-            chrome::spread(
-                "Sent / received",
-                &format!(
-                    "{}/{}",
-                    s.sent_flood + s.sent_direct,
-                    s.recv_flood + s.recv_direct
-                ),
-                w,
-            ),
-            String::new(),
-        ];
+        let used = duty_used(ui);
+        let mut l: Vec<String> = airtime_rows(ui)
+            .iter()
+            .map(|(k, v)| chrome::spread(k, v, w))
+            .collect();
+        l.push(String::new());
         match regions::duty_rule(dev.node.prefs.radio.freq_khz) {
             Some((band, limit)) => {
-                l.push(format!(
-                    "Duty {}.{:02}% of {}.{:01}% ({band})",
-                    used / 100,
-                    used % 100,
-                    limit / 100,
-                    limit % 100 / 10
-                ));
+                l.push(duty_text(used, &band, limit));
                 let len = w;
                 let filled = (len as u64 * u64::from(used) / u64::from(limit.max(1)))
                     .min(len as u64) as usize;
@@ -727,9 +882,42 @@ impl Screen for Airtime {
                     ui.sym.dot.repeat(len - filled)
                 ));
             }
-            None => l.push(String::from("No duty-cycle rule for this frequency.")),
+            None => l.push(String::from(NO_DUTY_RULE)),
         }
         lines_to(f, body, l);
+    }
+
+    /// On the panel: the values, then the share of the hour used against the band's limit as
+    /// a gauge.
+    fn scene(&mut self, w: u16, _h: u16, ui: &Ui<'_>) -> Option<Scene> {
+        let mut sc = Scene::new();
+        let y = pixel::fields(&mut sc, w, 0, &airtime_rows(ui));
+        match regions::duty_rule(ui.ctx.dev.node.prefs.radio.freq_khz) {
+            Some((band, limit)) => {
+                let used = duty_used(ui);
+                let y = y + 14;
+                sc.text(
+                    pixel::MARGIN,
+                    y,
+                    Font::R8,
+                    Align::Left,
+                    true,
+                    &duty_text(used, &band, limit),
+                );
+                let bw = w.saturating_sub(8);
+                sc.rect(4, y + 4, bw, 11, 3, None, Some(true));
+                let fill = (u64::from(bw.saturating_sub(4)) * u64::from(used)
+                    / u64::from(limit.max(1)))
+                .min(u64::from(bw.saturating_sub(4))) as u16;
+                if fill > 0 {
+                    sc.rect(6, y + 6, fill, 7, 1, Some(true), None);
+                }
+            }
+            None => {
+                pixel::note(&mut sc, w, y + 2, NO_DUTY_RULE);
+            }
+        }
+        Some(sc)
     }
 
     fn footer(&self, _ui: &Ui<'_>) -> Footer {

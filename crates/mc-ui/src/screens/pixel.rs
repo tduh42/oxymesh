@@ -238,6 +238,83 @@ pub fn rich_list(ui: &Ui<'_>, w: u16, h: u16, rows: &[Row], selected: usize) -> 
     sc
 }
 
+/// Row pitch of a page of labelled values ([`fields`]).
+pub const FIELD_PITCH: i16 = 12;
+
+/// Labelled values from `y` down, one per row: the label on the left, the value on the right in
+/// bold, a rule between. A value too long for what the label leaves is shortened.
+/// Returns the `y` under the last row.
+pub fn fields(sc: &mut Scene, w: u16, y: i16, rows: &[(&str, String)]) -> i16 {
+    let w = w as i16;
+    let mut y = y;
+    for (i, (label, value)) in rows.iter().enumerate() {
+        let base = y + FIELD_PITCH - 3;
+        sc.text(MARGIN, base, Font::R8, Align::Left, true, label);
+        let room = w - MARGIN - 4 - scene::width(Font::R8, label) - 8;
+        let v = scene::ellipsize(Font::B8, value, room);
+        sc.text(w - 4, base, Font::B8, Align::Right, true, &v);
+        y += FIELD_PITCH;
+        if i + 1 < rows.len() {
+            sc.hline(MARGIN, w - 4, y - 1);
+        }
+    }
+    y
+}
+
+/// A titled bar chart, oldest value on the left: `data` scaled to its largest value, in a box
+/// `h` high under the title. Returns the `y` under the box.
+pub fn chart(sc: &mut Scene, w: u16, y: i16, h: u16, title: &str, data: &[u64]) -> i16 {
+    sc.text(MARGIN, y + 8, Font::R8, Align::Left, true, title);
+    let top = y + 11;
+    let (x0, bw) = (4i16, w.saturating_sub(8));
+    sc.rect(x0, top, bw, h, 2, None, Some(true));
+    let inner_w = bw.saturating_sub(4) as i16;
+    let inner_h = h.saturating_sub(4) as i16;
+    let max = data.iter().copied().max().unwrap_or(0);
+    if max == 0 {
+        // No history yet (the first minute), or nothing in it.
+        let mid = top + h as i16 / 2 + Font::R8.ascent() / 2;
+        sc.text(
+            w as i16 / 2,
+            mid,
+            Font::R8,
+            Align::Center,
+            true,
+            "Nothing yet",
+        );
+    } else if inner_w > 0 {
+        let n = data.len() as i16;
+        for (i, v) in data.iter().enumerate() {
+            let bh = ((*v * inner_h as u64).div_ceil(max)) as i16;
+            if bh == 0 {
+                continue;
+            }
+            let xa = x0 + 2 + (i as i16 * inner_w) / n;
+            let xb = (x0 + 2 + ((i as i16 + 1) * inner_w) / n - 1).max(xa);
+            sc.rect(
+                xa,
+                top + 2 + inner_h - bh,
+                (xb - xa + 1) as u16,
+                bh as u16,
+                0,
+                Some(true),
+                None,
+            );
+        }
+    }
+    top + h as i16
+}
+
+/// A note in the margin, wrapped (an empty list, an explanation). Returns the `y` under it.
+pub fn note(sc: &mut Scene, w: u16, y: i16, text: &str) -> i16 {
+    let mut y = y;
+    for l in scene::wrap(Font::R8, text, w as i16 - 2 * MARGIN) {
+        y += 11;
+        sc.text(MARGIN, y, Font::R8, Align::Left, true, &l);
+    }
+    y + 3
+}
+
 /// Gap between two tiles, and between the tiles and the body's edges (twice).
 pub const TILE_GAP: i16 = 2;
 
@@ -287,6 +364,60 @@ pub fn tile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chart_scales_its_bars_and_says_when_it_has_nothing() {
+        use crate::scene::Item;
+        let bars = |sc: &Scene| {
+            sc.items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Rect {
+                        h,
+                        fill: Some(true),
+                        ..
+                    } => Some(*h),
+                    _ => None,
+                })
+                .collect::<alloc::vec::Vec<_>>()
+        };
+        let mut sc = Scene::new();
+        let end = chart(&mut sc, 200, 0, 40, "Packets", &[]);
+        assert_eq!(end, 11 + 40);
+        assert!(sc.texts().contains(&"Nothing yet"));
+        assert!(bars(&sc).is_empty());
+        let mut sc = Scene::new();
+        chart(&mut sc, 200, 0, 40, "Packets", &[0, 0, 0]);
+        assert!(sc.texts().contains(&"Nothing yet"), "all zero is nothing");
+        let mut sc = Scene::new();
+        chart(&mut sc, 200, 0, 40, "Packets", &[0, 2, 4]);
+        assert!(!sc.texts().contains(&"Nothing yet"));
+        // The largest fills the box (36 px inside), half of it half; a zero draws nothing.
+        assert_eq!(bars(&sc), alloc::vec![18, 36]);
+    }
+
+    #[test]
+    fn fields_put_the_value_right_and_rule_between_rows() {
+        use crate::scene::Item;
+        let mut sc = Scene::new();
+        let rows = [
+            ("Name", String::from("Morgan")),
+            ("Key", String::from("ab12")),
+        ];
+        let end = fields(&mut sc, 200, 0, &rows);
+        assert_eq!(end, 2 * FIELD_PITCH);
+        let rules = sc
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Line { .. }))
+            .count();
+        assert_eq!(rules, 1, "between rows, not under the last");
+        let value = sc.items.iter().find_map(|i| match i {
+            Item::Text { text, align, x, .. } if text == "Morgan" => Some((*align, *x)),
+            _ => None,
+        });
+        assert_eq!(value, Some((Align::Right, 196)));
+    }
 
     #[test]
     fn initials_of_names() {
