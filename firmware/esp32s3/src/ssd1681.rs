@@ -1,10 +1,18 @@
 //! SSD1681 e-paper display, 200×200 black and white (GDEY0154D67 panel of the ThinkNode M5).
 //!
 //! Written from the SSD1681 datasheet (Solomon Systech, rev. 1.0), without taking anything from
-//! GxEPD2 (GPL, ADR-0007). Two modes: full refresh (OTP waveform, ~2 s, clears ghosting) and
-//! partial ("display mode 2", ~0.5 s), which compares the new image (RAM 0x24) with the old one
-//! (RAM 0x26). The BUSY pin stays high during a refresh: the driver does not wait for it, it
-//! exposes [`Ssd1681::busy`] so that the main loop keeps running (radio, BLE).
+//! GxEPD2 (GPL, ADR-0007). Two kinds of refresh:
+//! - partial ("display mode 2", ~0.5 s): drives the pixels that differ between the new image
+//!   (RAM 0x24) and the old one (RAM 0x26);
+//! - full, in two steps (~2.5 s): the whole panel cleared to white with the OTP mode-1
+//!   waveform (it clears ghosts), then the image drawn by a partial refresh from white. Some
+//!   panels' mode-1 waveform leaves a full-screen image grey, while their mode-2 transitions
+//!   are deep; drawn this way every black pixel comes from a mode-2 transition, as MeshCore's
+//!   driver does it (`docs/measurements.md` 2026-11-17).
+//!
+//! The BUSY pin stays high during a refresh: the driver does not wait for it, it exposes
+//! [`Ssd1681::busy`] so that the main loop keeps running (radio, BLE), and
+//! [`Ssd1681::continue_full`] for the second step of a full refresh.
 
 use esp_hal::Blocking;
 use esp_hal::delay::Delay;
@@ -33,6 +41,8 @@ pub struct Ssd1681<'d> {
     rst: Output<'d>,
     busy: Input<'d>,
     delay: Delay,
+    /// The panel was cleared to white for a full refresh: the image still has to be drawn.
+    from_white: bool,
 }
 
 impl<'d> Ssd1681<'d> {
@@ -50,6 +60,7 @@ impl<'d> Ssd1681<'d> {
             rst,
             busy,
             delay: Delay::new(),
+            from_white: false,
         }
     }
 
@@ -102,7 +113,24 @@ impl<'d> Ssd1681<'d> {
         self.command(0x45, &[0x00, 0x00, 0xC7, 0x00])?; // RAM Y: lines 0 to 199
         self.command(0x3C, &[0x05])?; // Border waveform
         self.command(0x18, &[0x80])?; // Internal temperature sensor
+        self.from_white = false;
         Ok(())
+    }
+
+    /// A RAM filled with one byte (0xFF: white).
+    fn fill_ram(&mut self, cmd: u8, byte: u8) -> Result<(), Error> {
+        self.command(0x4E, &[0x00])?;
+        self.command(0x4F, &[0x00, 0x00])?;
+        let chunk = [byte; 100];
+        self.cs.set_low();
+        self.dc.set_low();
+        let mut r = self.spi.write(&[cmd]).map_err(|_| Error::Spi);
+        self.dc.set_high();
+        for _ in 0..BUF / chunk.len() {
+            r = r.and_then(|()| self.spi.write(&chunk).map_err(|_| Error::Spi));
+        }
+        self.cs.set_high();
+        r
     }
 
     fn write_ram(&mut self, cmd: u8, frame: &Frame) -> Result<(), Error> {
@@ -111,24 +139,45 @@ impl<'d> Ssd1681<'d> {
         self.command(cmd, &frame.bits)
     }
 
-    /// Full refresh: the image goes into both RAMs (new and old) so that the next partial
-    /// refresh starts from it. Returns immediately; BUSY drops at the end (~2 s).
-    pub fn show_full(&mut self, frame: &Frame) -> Result<(), Error> {
+    /// Full refresh, first step: the panel cleared to white (~2 s). Returns immediately; once
+    /// BUSY drops, [`Ssd1681::continue_full`] draws the image (or the next partial refresh
+    /// does, from white).
+    pub fn show_full(&mut self, _frame: &Frame) -> Result<(), Error> {
         self.wait(5000)?;
         // Border back to the waveform's white: a partial refresh set it to "unchanged".
         self.command(0x3C, &[0x05])?;
-        self.write_ram(0x24, frame)?;
-        self.write_ram(0x26, frame)?;
+        self.fill_ram(0x24, 0xFF)?;
+        self.fill_ram(0x26, 0xFF)?;
         self.command(0x22, &[0xF7])?; // clock, temperature, OTP LUT, mode 1
-        self.command(0x20, &[])
+        self.command(0x20, &[])?;
+        self.from_white = true;
+        Ok(())
     }
 
-    /// Partial refresh (mode 2) from the previous image; the image then becomes the reference
-    /// for the next partial refresh.
+    /// A full refresh is halfway: the panel is white, the image not drawn yet.
+    pub fn full_pending(&self) -> bool {
+        self.from_white
+    }
+
+    /// Full refresh, second step: the image drawn from white by a partial refresh (~0.5 s).
+    /// Does nothing if no full refresh is halfway.
+    pub fn continue_full(&mut self, frame: &Frame) -> Result<(), Error> {
+        if !self.from_white {
+            return Ok(());
+        }
+        self.show_partial(frame, frame)
+    }
+
+    /// After the first step of a full refresh, the panel is white whatever `previous` says.
     pub fn show_partial(&mut self, frame: &Frame, previous: &Frame) -> Result<(), Error> {
         self.wait(5000)?;
         self.command(0x3C, &[0x80])?; // border unchanged in partial mode
-        self.write_ram(0x26, previous)?;
+        if self.from_white {
+            self.fill_ram(0x26, 0xFF)?;
+            self.from_white = false;
+        } else {
+            self.write_ram(0x26, previous)?;
+        }
         self.write_ram(0x24, frame)?;
         self.command(0x22, &[0xFF])?; // mode 2: partial
         self.command(0x20, &[])

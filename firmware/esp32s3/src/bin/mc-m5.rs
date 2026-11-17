@@ -377,10 +377,14 @@ async fn main(_spawner: Spawner) -> ! {
     )
     .ok()
     .map(|i2c| Pcf8563::new(i2c.with_sda(p.GPIO2).with_scl(p.GPIO1)));
+    // The peripherals' rail (e-ink, GPS, LoRa) on before any of them is set up: a panel set up
+    // on a rail not fully up gave grey, ghosting refreshes on one M5 (`docs/measurements.md`
+    // 2026-11-17).
     if let Some(io) = io.as_mut() {
         let _ = io.set(pin::LED_ENABLE, true);
+        let _ = io.set(pin::PERIPH_POWER, true);
     }
-    Timer::after(Duration::from_millis(10)).await;
+    Timer::after(Duration::from_millis(20)).await;
 
     // GPS: the board revision from the expander's IO7, read 10 times (high = v2.0, AG3352).
     let highs = (0..10)
@@ -531,9 +535,6 @@ async fn main(_spawner: Spawner) -> ! {
     );
     let _ = epd.init();
     let frames = FRAMES.init([Frame::new(), Frame::new()]);
-    if let Some(io) = io.as_mut() {
-        let _ = io.set(pin::PERIPH_POWER, true);
-    }
     let pull_up = InputConfig::default().with_pull(Pull::Up);
     let mut btn_a = Input::new(p.GPIO21, pull_up);
     let mut btn_b = Input::new(p.GPIO14, pull_up);
@@ -600,6 +601,9 @@ async fn main(_spawner: Spawner) -> ! {
         let mut power = diag::Power::new();
         #[cfg(feature = "debug-log")]
         let mut crash_test: Option<u64> = None;
+        // A refresh sent to the panel: its kind and when, until BUSY drops.
+        #[cfg(feature = "debug-log")]
+        let mut refreshing: Option<(Kind, Instant)> = None;
         // Light sleeps (ADR-0014): how many, ms asleep, woken by a person, woken by a packet.
         #[cfg(feature = "debug-log")]
         let mut sleeps = (0u32, 0u64, 0u32, 0u32);
@@ -922,6 +926,10 @@ async fn main(_spawner: Spawner) -> ! {
                         while epd.busy() {
                             Timer::after(Duration::from_millis(20)).await;
                         }
+                        let _ = epd.continue_full(cur);
+                        while epd.busy() {
+                            Timer::after(Duration::from_millis(20)).await;
+                        }
                         let _ = epd.sleep();
                         radio.sleep();
                         if let Some(g) = gps_rx.as_mut() {
@@ -1004,7 +1012,15 @@ async fn main(_spawner: Spawner) -> ! {
             want_draw |= app.take_dirty();
             if !epd.busy() {
                 let [cur, prev] = &mut *frames;
-                if want_draw {
+                // A full refresh cleared the panel to white: now the image (unless a newer one
+                // is drawn below, which then starts from white).
+                if epd.full_pending() && !want_draw {
+                    let _ = epd.continue_full(cur);
+                    #[cfg(feature = "debug-log")]
+                    {
+                        refreshing = Some((Kind::Partial, Instant::now()));
+                    }
+                } else if want_draw {
                     want_draw = false;
                     let c = ui_ctx(
                         dev,
@@ -1036,7 +1052,8 @@ async fn main(_spawner: Spawner) -> ! {
                     prev.bits = cur.bits;
                     let u = dev.node.prefs.ui;
                     to_panel(term.backend().display(), cur, u.invert, u.rotate);
-                    match policy.frame(refresh::hash(&cur.bits), app.take_screen_changed()) {
+                    let kind = policy.frame(refresh::hash(&cur.bits), app.take_screen_changed());
+                    match kind {
                         Some(Kind::Full) => {
                             let _ = epd.show_full(cur);
                         }
@@ -1045,9 +1062,29 @@ async fn main(_spawner: Spawner) -> ! {
                         }
                         None => {}
                     }
+                    #[cfg(feature = "debug-log")]
+                    if let Some(k) = kind {
+                        refreshing = Some((k, Instant::now()));
+                    }
                 } else if policy.idle(now_ms) == Some(Kind::Full) {
                     let _ = epd.show_full(cur);
+                    #[cfg(feature = "debug-log")]
+                    {
+                        refreshing = Some((Kind::Full, Instant::now()));
+                    }
                 }
+            }
+            // How long the panel stays busy for each refresh, and what kind it was.
+            #[cfg(feature = "debug-log")]
+            if let Some((k, t)) = refreshing
+                && !epd.busy()
+            {
+                info!(
+                    "epd: {k:?} {} ms (debt {})",
+                    t.elapsed().as_millis(),
+                    policy.debt()
+                );
+                refreshing = None;
             }
             #[cfg(feature = "debug-log")]
             power.pass(pass_start);
@@ -1079,9 +1116,13 @@ async fn main(_spawner: Spawner) -> ! {
             if let Some(t) = blink_off {
                 due.at_ms(t);
             }
-            if want_draw {
+            if want_draw || epd.full_pending() {
                 // The panel is busy refreshing: look again soon.
                 due.at_ms(now_ms + 20);
+            }
+            #[cfg(feature = "debug-log")]
+            if refreshing.is_some() {
+                due.at_ms(now_ms + 10);
             }
             if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
                 // UART1 at 9600 baud: its 128-byte FIFO fills in about 130 ms.
@@ -1095,6 +1136,7 @@ async fn main(_spawner: Spawner) -> ! {
                 && !light
                 && !want_draw
                 && !epd.busy()
+                && !epd.full_pending()
                 && !radio.transmitting()
                 && dev.node.next_wakeup().is_none()
                 && !gps_rx.as_ref().is_some_and(|g| g.is_on())

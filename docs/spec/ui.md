@@ -151,8 +151,9 @@ Home (always-on face)
   - at 3,000, the next screen change is a full refresh;
   - a screen change right after sending something is a full refresh.
 - No refresh when the frame has not changed (hash of the panel bytes).
+- **A full refresh is two steps**: the whole panel cleared to white with the mode-1 waveform (2.0 s: it clears every ghost), then the image drawn by a partial refresh from white (0.5 s). Every black pixel thus comes from a mode-2 transition, as in MeshCore's driver. On one M5 the mode-1 waveform left a full-screen image grey and the previous screen visible, while its mode-2 transitions were deep (`docs/measurements.md`, 2026-11-17). A frame drawn between the two steps starts from white too.
 - The clock redraws once a minute; the battery percentage redraws only when it moves by 5 points or more.
-- Measured (U0): partial refresh visible 549 ms after the input, full refresh 2.0 s.
+- Measured (U0): partial refresh visible 549 ms after the input, full refresh 2.0 s (2.5 s in two steps since 2026-11-17).
 
 ## 11. Emulator and verification
 
