@@ -33,6 +33,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, Uart};
 use esp_storage::FlashStorage;
 use log::info;
+use mc_node::clock::Source;
 use mc_node::{Node, Prefs};
 use mc_server::neighbours::Neighbours;
 use mc_server::server::{Action, Gps as GpsState, default_node_prefs};
@@ -202,7 +203,7 @@ pub async fn run(role: Role) -> ! {
     if let Some(t) = rtc_chip.as_mut().and_then(Pcf8563::read)
         && t >= BOOT_EPOCH
     {
-        node.rtc.set(mc_now(), t);
+        node.rtc.set_from(mc_now(), t, Source::Chip);
     }
     rpt.board.manufacturer = MANUFACTURER;
     rpt.board.build_date = BUILD_DATE;
@@ -322,7 +323,7 @@ pub async fn run(role: Role) -> ! {
                 node.gps_alt_mm = f.alt_mm;
             }
             if let Some(t) = t {
-                node.rtc.set(now, t);
+                node.rtc.set_from(now, t, Source::Gps);
                 if let Some(c) = rtc_chip.as_mut() {
                     let _ = c.write(t);
                 }

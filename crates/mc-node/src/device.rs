@@ -20,9 +20,11 @@ use mc_proto::response::{Contact as RContact, DeviceInfo, LoginServer, SelfInfo,
 use mc_proto::{Command, Response};
 use rand_core::Rng;
 
+use crate::clock::Source;
 use crate::contacts::{Contact, MAX_CHANNELS, MAX_CONTACTS, PATH_UNKNOWN, Slot, name_str};
 use crate::heard::{Heard, HeardNode, LoggedPacket, Minutes, PacketLog};
 use crate::history::{HISTORY_RECORD, HISTORY_TEXT, History, Msg, Peer, Status};
+use crate::meshtime::{self, MeshTime};
 use crate::node::{Event, Node, SendError, Sent};
 use crate::persist::{CHANNEL_RECORD, CONTACT_RECORD, PREFS_RECORD, encode_contact, encode_prefs};
 
@@ -195,6 +197,8 @@ pub struct Device {
     queue_seq: u32,
     history: History,
     heard: Heard,
+    /// Timestamps heard while nothing set the clock (`crate::meshtime`).
+    meshtime: MeshTime,
     packets: PacketLog,
     minutes: Minutes,
     outbox: heapless::Vec<screen::Outgoing, OUTBOX>,
@@ -302,6 +306,7 @@ impl Device {
             queue_seq: 1,
             history: History::new(),
             heard: Heard::new(),
+            meshtime: MeshTime::new(),
             packets: PacketLog::new(),
             minutes: Minutes::new(),
             outbox: heapless::Vec::new(),
@@ -385,10 +390,33 @@ impl Device {
         self.gps.filter(|_| self.gps_active())
     }
 
-    /// Sets the clock (from the app or the GPS); the board's clock chip follows.
+    /// Sets the clock from the app; the board's clock chip follows.
     pub fn set_time(&mut self, now: Instant, unix: u32) {
-        self.node.rtc.set(now, unix);
+        self.set_time_from(now, unix, Source::App);
+    }
+
+    /// Sets the clock (from the app, the GPS or the mesh); the board's clock chip follows.
+    pub fn set_time_from(&mut self, now: Instant, unix: u32, source: Source) {
+        self.node.rtc.set_from(now, unix, source);
+        self.meshtime.clear();
         let _ = self.actions.push_back(Action::ClockSet);
+    }
+
+    /// Mesh time (`docs/spec/companion.md` §9, 14): `ts`, heard from `sender`, counts only
+    /// while nothing has set the clock; once enough senders agree, their time is taken.
+    fn heard_time(&mut self, now: Instant, sender: u32, ts: u32) {
+        if self.node.rtc.is_set() {
+            return;
+        }
+        if let Some(t) = self.meshtime.note(sender, ts, now, self.node.rtc.floor()) {
+            self.set_time_from(now, t, Source::Mesh);
+        }
+    }
+
+    /// Mesh time: the samples held and the largest group that agrees (for diagnostics).
+    pub fn mesh_time(&self, now: Instant) -> (usize, usize) {
+        let g = self.meshtime.group(now).map_or(0, |g| g.senders);
+        (self.meshtime.held(), g)
     }
 
     /// Writes pending contacts right away (before a reboot).
@@ -750,6 +778,10 @@ impl Device {
                 author,
                 text,
             } => {
+                // Plain texts only: a room server's posts (signed) carry their old time.
+                if *txt_type == 0 && author.is_none() {
+                    self.heard_time(now, meshtime::key_tag(key), *ts);
+                }
                 let clock = self.node.rtc.now(now);
                 self.node.connections.mark_active(key, clock);
                 // A console command from a contact allowed to run them: answered here, not shown.
@@ -808,6 +840,16 @@ impl Device {
                 ts,
                 text,
             } => {
+                let mine = {
+                    let n = name_str(&self.node.prefs.name);
+                    text.starts_with(n) && text.get(n.len()..).is_some_and(|r| r.starts_with(b": "))
+                };
+                if *txt_type == 0
+                    && !mine
+                    && let Some(tag) = meshtime::channel_tag(*idx, text)
+                {
+                    self.heard_time(now, tag, *ts);
+                }
                 let hist = self.remember(now, Peer::Channel(*idx), *ts, *path_len, *snr4, text, st);
                 let room = FRAME_MAX - if self.app_target_ver >= 3 { 11 } else { 8 };
                 let body = text.get(..text.len().min(room)).unwrap_or(&[]);
@@ -874,8 +916,12 @@ impl Device {
                 snr4,
                 name,
                 location,
-                ..
+                ts,
+                shared,
             } => {
+                if !*shared && key != self.node.id.pub_key() {
+                    self.heard_time(now, meshtime::key_tag(key), *ts);
+                }
                 let prefix: [u8; 7] = fixed(key);
                 let recv_ts = self.node.time(now);
                 self.heard.note(HeardNode {
