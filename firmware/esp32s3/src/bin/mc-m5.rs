@@ -41,6 +41,7 @@ use esp_hal::uart::{Config as UartConfig, Uart};
 use esp_radio::ble::controller::BleConnector;
 use esp_storage::FlashStorage;
 use log::info;
+use mc_node::clock::Source;
 use mc_node::device::{Action, FrontEnd, Info, UiEvent};
 use mc_node::{Device, Prefs};
 use mc_spiffs::cpp;
@@ -468,10 +469,10 @@ async fn main(_spawner: Spawner) -> ! {
     // The clock chip kept the time across the reboot or power-off, unless it lost power.
     match rtc_chip.as_mut().and_then(Pcf8563::read) {
         Some(t) if t >= BOOT_EPOCH => {
-            dev.node.rtc.set(mc_now(), t);
+            dev.node.rtc.set_from(mc_now(), t, Source::Chip);
             info!("clock: {t} from the PCF8563");
         }
-        other => info!("clock: not set ({other:?}), until a phone or the GPS sets it"),
+        other => info!("clock: not set ({other:?}), until a phone, the GPS or the mesh sets it"),
     }
     dev.connected = true; // USB: always connected.
 
@@ -642,7 +643,7 @@ async fn main(_spawner: Spawner) -> ! {
                 }
                 dev.report_gps(fix);
                 if let Some(t) = t {
-                    dev.set_time(now, t);
+                    dev.set_time_from(now, t, Source::Gps);
                     info!("gps: clock set to {t}");
                 }
             }
@@ -710,7 +711,7 @@ async fn main(_spawner: Spawner) -> ! {
                     diag::log();
                     // Boot lines can be lost on the CH340 (FIFO overrun); the state again here.
                     info!(
-                        "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {}; clock chip {:?} (lost power, time); rx {} flood {} direct",
+                        "status: up {} s; boots {:x?}; gps board {revision:?} ({highs}/10 high) {} (switch {}, {} B, {} sentences, {} errors, {} sats, fix {}); noise {} dBm; chip {:?} (0.1 °C); clock {} from {:?}; mesh time {:?} (samples, agreeing); clock chip {:?} (lost power, time); rx {} flood {} direct",
                         Instant::now().as_secs(),
                         crash::boots(),
                         if gps_rx.as_ref().is_some_and(|g| g.is_on()) {
@@ -727,6 +728,8 @@ async fn main(_spawner: Spawner) -> ! {
                         dev.noise_floor,
                         dev.mcu_temp_deci,
                         dev.node.rtc.now(mc_now()),
+                        dev.node.rtc.source(),
+                        dev.mesh_time(mc_now()),
                         rtc_chip.as_mut().map(Pcf8563::inspect),
                         dev.node.disp.stats.recv_flood,
                         dev.node.disp.stats.recv_direct,

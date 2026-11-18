@@ -871,10 +871,22 @@ pub fn time() -> Menu {
             Item::with(
                 "Clock",
                 |ui| clock::hhmm(ui.ctx.time()),
-                Action::Run(|_| Nav::Toast(String::from("Set by the phone app or the GPS"))),
+                Action::Run(|ui| Nav::Toast(String::from(clock_source(ui)))),
             ),
         ],
     )
+}
+
+/// Where the clock's time came from (`mc_node::clock::Source`).
+fn clock_source(ui: &Ui<'_>) -> &'static str {
+    use mc_node::clock::Source;
+    match ui.ctx.dev.node.rtc.source() {
+        Some(Source::Chip) => "Kept by the clock chip",
+        Some(Source::App) => "Set by the phone app",
+        Some(Source::Gps) => "Set by the GPS",
+        Some(Source::Mesh) => "Taken from the mesh",
+        None => "Not set: phone/GPS/mesh",
+    }
 }
 
 /// Settings → Identity → Share location: in adverts or not.

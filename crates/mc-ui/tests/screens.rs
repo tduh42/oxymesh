@@ -200,6 +200,41 @@ fn an_unset_clock_shows_no_time() {
     );
 }
 
+/// Settings → Time → Clock tells what set the clock (`mc_node::clock::Source`).
+#[test]
+fn the_clock_row_says_what_set_it() {
+    use mc_node::clock::Source;
+    let mut w = world();
+    let now = w.now;
+    w.nodes[0].dev.node.rtc = mc_node::clock::Rtc::new(mc_sim::EPOCH, now);
+    // Settings, Time (second to last), Clock (second).
+    let open = [
+        Double(A),
+        Long(A),
+        Double(A),
+        Double(A),
+        Long(A),
+        Click(A),
+        Long(A),
+    ];
+    for (source, want) in [
+        (None, "Not set: phone/GPS/mesh"),
+        (Some(Source::Mesh), "Taken from the mesh"),
+        (Some(Source::Chip), "Kept by the clock chip"),
+    ] {
+        if let Some(s) = source {
+            w.nodes[0].dev.node.rtc.set_from(now, mc_sim::EPOCH + 30, s);
+        }
+        let c = ctx(&w);
+        let mut app = App::new(LARGE, false);
+        press(&mut app, &c, &open);
+        assert_eq!(app.toast_text(), Some(want));
+        // Whole on the text grid (24 columns).
+        let shown = text(&mut app, LARGE, &c);
+        assert!(shown.contains(want), "{shown}");
+    }
+}
+
 #[test]
 fn hold_to_confirm() {
     let w = world();

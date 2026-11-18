@@ -112,7 +112,7 @@ The reference is the original MeshCore v1.18 companion firmware on the same M5.
 - **Message previews.** Settings → Notifications → Previews: shown, sender only, or hidden. Hidden keeps message text (and the sender) off Home, the lists and the new-message card; a lock in the header says so. On Home, three quick presses of the top button cycle the buzzer, four cycle the previews.
 - **It does not stay dead.** A crash or a stuck main loop restarts the device (watchdog), and the radio chip is reset when it stops listening. About says why the device last started. When its radio stops listening, the C++ only raises an error flag ([ADR-0013](docs/decisions/0013-restart-instead-of-dying.md)).
 - **Bluetooth off, for the battery.** Settings → Bluetooth turns it off (after a restart): no phone can connect, and on battery the M5 light-sleeps between events like a repeater, woken by a packet or a button ([ADR-0014](docs/decisions/0014-bluetooth-off-lets-the-companion-sleep.md)).
-- **The clock does not pretend.** Until a clock chip, an app or the GPS gives the time, the screens show `--:--` and "Clock not set" rather than a made-up date.
+- **The clock does not pretend.** Until a clock chip, an app, the GPS or three nodes heard on the mesh give the time, the screens show `--:--` and "Clock not set" rather than a made-up date.
 - **USB and Bluetooth at the same time.** The C++ M5 build has Bluetooth only. A cable on the USB port works as a second app link.
 - **A new Bluetooth PIN applies at once.** The C++ waits for a reboot.
 - **Hibernation wakes up on the top button.** The C++ hibernates with no way to wake but a reset.

@@ -2,14 +2,28 @@
 
 use mc_core::{Duration, Instant};
 
+/// What gave the clock its time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The board's clock chip, at boot.
+    Chip,
+    /// The app (SET_DEVICE_TIME), a console or a tool.
+    App,
+    Gps,
+    /// Timestamps heard on the mesh (`crate::meshtime`).
+    Mesh,
+}
+
 /// Current Unix time, derived from a sync point and the monotonic clock.
 #[derive(Debug, Clone)]
 pub struct Rtc {
     base_epoch: u32,
     base: Instant,
     last_unique: u32,
-    /// Something gave the time since boot (a clock chip, an app, the GPS).
-    set: bool,
+    /// The runner's floor: no right time is older.
+    floor: u32,
+    /// What set the time since boot (a clock chip, an app, the GPS, the mesh).
+    source: Option<Source>,
 }
 
 impl Rtc {
@@ -20,13 +34,24 @@ impl Rtc {
             base_epoch: epoch,
             base: now,
             last_unique: 0,
-            set: false,
+            floor: epoch,
+            source: None,
         }
     }
 
     /// Whether something set the clock since boot. Until then the screens show no time.
     pub fn is_set(&self) -> bool {
-        self.set
+        self.source.is_some()
+    }
+
+    /// What set it, if anything.
+    pub fn source(&self) -> Option<Source> {
+        self.source
+    }
+
+    /// The floor the clock counted from at boot.
+    pub fn floor(&self) -> u32 {
+        self.floor
     }
 
     pub fn now(&self, now: Instant) -> u32 {
@@ -35,10 +60,15 @@ impl Rtc {
             .saturating_add(u32::try_from(secs).unwrap_or(u32::MAX))
     }
 
+    /// Sets the time, from the app or a tool.
     pub fn set(&mut self, now: Instant, epoch: u32) {
+        self.set_from(now, epoch, Source::App);
+    }
+
+    pub fn set_from(&mut self, now: Instant, epoch: u32, source: Source) {
         self.base_epoch = epoch;
         self.base = now;
-        self.set = true;
+        self.source = Some(source);
     }
 
     /// Time strictly increasing from one call to the next (`getCurrentTimeUnique`, MeshCore.h:119).
@@ -72,6 +102,8 @@ mod tests {
         assert!(!rtc.is_set(), "counting is not being set");
         rtc.set(later, 1_800_000_000);
         assert!(rtc.is_set());
+        assert_eq!(rtc.source(), Some(Source::App));
+        assert_eq!(rtc.floor(), 1_793_900_000);
         assert_eq!(rtc.now(later + Duration::from_secs(5)), 1_800_000_005);
     }
 }

@@ -326,6 +326,12 @@ Settings record v2 (160 bytes, `mc_node::persist`). Fields were added within v2 
 11. The GAP device name (read after connecting) holds at most 22 bytes, the `trouble-host` limit: `MeshCore-` and the first 13 bytes of the node name. The advertised name, which apps show while scanning, is whole up to 29 bytes as in the C++.
 12. Within the EU profile (`config/eu868.toml`), the radio transmits at most at the power the sub-band allows, counting the board's amplifier, and keeps the sub-band's duty cycle on top of the C++ airtime budget (`docs/spec/air.md` §4.5). The setting itself is untouched: the app reads back what it set.
 13. A frame for a connected phone is never dropped because the Bluetooth queue (4 frames) is full: it waits in the device's own queue (8 frames) until a notification frees a slot, for 2 s at most (§1.1). The C++ drops it (BLE:175-178). Invisible to the app, except that replies arrive instead of going missing; found with 112 contacts, where the C++-style drain lost the list's end (`crates/mc-sim/tests/ble_pacing.rs`).
+14. Mesh time: while nothing has set the clock since boot (no clock chip time, no SET_DEVICE_TIME, no GPS fix), the node takes it from the timestamps it hears (`mc_node::meshtime`). The C++ only takes it from the app and the GPS. Samples:
+    - verified adverts, not shared ones, not our own (the signature covers the timestamp), the sender being the key;
+    - plain direct messages (type 0, unsigned: a room server's posts carry their old time);
+    - plain channel messages, the sender being the channel and the name before `: `, not our own name.
+    
+    Each gives an estimate of the time now: its timestamp plus the time since it was heard. Estimates before the build floor or more than a year after it are dropped. The last 16 senders are kept, one sample each. Once 3 of them agree within 2 minutes, the clock takes the median of that group and the board's clock chip follows (`Action::ClockSet`). Wrong clocks are common on a mesh but scattered, so they rarely form a group. SET_DEVICE_TIME keeps the C++ rule afterwards (never back in time): a mesh time a little ahead only delays a phone's time by that much. Invisible to the app, which reads a set clock. Found when an M5 switched off at its hardware switch lost its clock chip's time and nothing else could set it (Bluetooth off, GPS switched off). Tests: `crates/mc-node/src/meshtime.rs`, `crates/mc-sim/tests/meshtime.rs`.
 
 ## 10. Device-side decoding (ADR-0002)
 
