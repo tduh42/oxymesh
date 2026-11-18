@@ -71,12 +71,13 @@ impl Home {
             None => String::from("Nothing heard yet"),
         };
         let r = &dev.node.prefs.radio;
-        let last = match dev.history().iter().filter(|m| !m.outgoing).last() {
-            Some(_) if !super::previews(ui).sender() => String::from(super::HIDDEN_TEXT),
-            Some(m) if !super::previews(ui).text() => {
+        // The newest unread message: once read, it leaves Home.
+        let last = dev.newest_unread_alerting().map(|m| match m {
+            _ if !super::previews(ui).sender() => String::from(super::HIDDEN_TEXT),
+            m if !super::previews(ui).text() => {
                 format!("{}: {}", super::peer_name(ui, m.peer), super::HIDDEN_TEXT)
             }
-            Some(m) => {
+            m => {
                 let text = String::from_utf8_lossy(&m.text);
                 match m.peer {
                     // Channel texts already start with "Name: ".
@@ -84,12 +85,10 @@ impl Home {
                     p => format!("{}: {text}", super::peer_name(ui, p)),
                 }
             }
-            None => String::new(),
-        };
-        alloc::vec![
-            clock::date(c.time()),
-            unread,
-            last,
+        });
+        let mut lines = alloc::vec![clock::date(c.time()), unread];
+        lines.extend(last);
+        lines.extend([
             heard,
             format!(
                 "{} {} {}",
@@ -105,7 +104,8 @@ impl Home {
                 r.bw_hz / 1000,
                 r.bw_hz % 1000 / 100
             ),
-        ]
+        ]);
+        lines
     }
 }
 
@@ -219,17 +219,12 @@ impl Screen for Home {
             true,
             &super::noise_text(dev.noise_floor),
         );
-        // The last message received.
+        // The newest unread message (muted channels aside); once read, the last node heard.
         let (cy, ch) = (52i16, 43u16);
         sc.rect(3, cy, w - 6, ch, 5, None, Some(true));
-        match dev.history().iter().filter(|m| !m.outgoing).last() {
+        match dev.newest_unread_alerting() {
             Some(m) => {
-                let icon = if dev.unread_alerting() > 0 {
-                    Icon::Mail
-                } else {
-                    Icon::Chat
-                };
-                sc.icon(8, cy + 5, icon, IconSize::S8, true);
+                sc.icon(8, cy + 5, Icon::Mail, IconSize::S8, true);
                 let when = clock::ago(m.at, c.unix);
                 sc.text(wi - 8, cy + 12, Font::R8, Align::Right, true, &when);
                 let who = if super::previews(ui).sender() {
@@ -256,7 +251,7 @@ impl Screen for Home {
                     Some(n) => format!("Heard {} {}", heard_name(ui, n), clock::ago(n.at, c.unix)),
                     None => String::from("Nothing heard yet"),
                 };
-                sc.text(8, cy + 16, Font::B10, Align::Left, true, "No messages yet");
+                sc.text(8, cy + 16, Font::B10, Align::Left, true, "No new messages");
                 let heard = scene::ellipsize(Font::R8, &heard, wi - 16);
                 sc.text(8, cy + 32, Font::R8, Align::Left, true, &heard);
             }
