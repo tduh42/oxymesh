@@ -1434,3 +1434,69 @@ fn the_header_shows_a_lock_while_previews_are_off() {
         assert_eq!(has, lock, "{mode:?}");
     }
 }
+
+/// Home's box shows the newest unread message, and once everything is read the last node
+/// heard: a message read on the device or fetched by the app leaves Home. A muted channel's
+/// message never shows there.
+#[test]
+fn homes_box_empties_once_the_messages_are_read() {
+    use mc_node::history::Peer;
+    let home = |w: &mc_sim::World, grid: Grid| {
+        let c = ctx(w);
+        let mut app = App::new(grid, true);
+        draw_panel(&mut app, grid, &c);
+        let shown = body_texts(&app).join(" | ");
+        // The grid version (the terminal) follows the same rule.
+        (shown, text(&mut app, grid, &c))
+    };
+    for grid in [LARGE, COMPACT] {
+        let mut w = world();
+        let bob = w.nodes[0]
+            .dev
+            .history()
+            .iter()
+            .find(|m| matches!(m.peer, Peer::Contact(_)))
+            .unwrap()
+            .peer;
+        let (shown, _) = home(&w, grid);
+        assert!(shown.contains("Coffee at the refuge"), "{grid:?}: {shown}");
+        {
+            let sn = &mut w.nodes[0];
+            sn.dev.mark_read(bob, &mut sn.st);
+        }
+        let (shown, _) = home(&w, grid);
+        assert!(
+            shown.contains("Snow on the pass") && !shown.contains("Coffee"),
+            "{grid:?}: {shown}"
+        );
+        // Public muted: its unread message stays in its conversation, not on Home.
+        let muted = w.nodes[0].dev.node.prefs.ui.with_muted(0, true);
+        {
+            let sn = &mut w.nodes[0];
+            sn.dev.set_ui(muted, &mut sn.st);
+        }
+        let (shown, _) = home(&w, grid);
+        assert!(!shown.contains("Snow"), "{grid:?}: {shown}");
+        assert!(shown.contains("No new messages"), "{grid:?}: {shown}");
+        // Unmuted and read: nothing left to show but the last node heard.
+        let unmuted = w.nodes[0].dev.node.prefs.ui.with_muted(0, false);
+        {
+            let sn = &mut w.nodes[0];
+            sn.dev.set_ui(unmuted, &mut sn.st);
+            sn.dev.mark_read(Peer::Channel(0), &mut sn.st);
+        }
+        let (shown, grid_text) = home(&w, grid);
+        assert!(
+            shown.contains("No new messages") && shown.contains("Heard"),
+            "{grid:?}: {shown}"
+        );
+        assert!(
+            !shown.contains("Coffee") && !shown.contains("Snow"),
+            "{grid:?}: {shown}"
+        );
+        assert!(
+            !grid_text.contains("Coffee") && !grid_text.contains("Snow"),
+            "{grid:?}:\n{grid_text}"
+        );
+    }
+}

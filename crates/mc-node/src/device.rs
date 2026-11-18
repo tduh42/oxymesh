@@ -539,12 +539,21 @@ impl Device {
     /// Unread messages that call for attention: muted channels left out. Their own
     /// conversations still count them (`History::unread_with`).
     pub fn unread_alerting(&self) -> usize {
+        self.alerting_unread().count()
+    }
+
+    /// The newest of those: what Home's box shows until it is read.
+    pub fn newest_unread_alerting(&self) -> Option<&Msg> {
+        self.alerting_unread().last()
+    }
+
+    /// Unread messages outside muted channels, oldest first.
+    fn alerting_unread(&self) -> impl Iterator<Item = &Msg> {
         let ui = &self.node.prefs.ui;
         self.history
             .iter()
             .filter(|m| m.is_unread())
-            .filter(|m| !matches!(m.peer, Peer::Channel(i) if ui.is_muted(i)))
-            .count()
+            .filter(move |m| !matches!(m.peer, Peer::Channel(i) if ui.is_muted(i)))
     }
 
     /// The screen opened the conversation: its messages are read.
